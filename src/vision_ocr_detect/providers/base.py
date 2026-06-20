@@ -33,8 +33,15 @@ class VisionProvider(Protocol):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        seed: int | None = None,
+        response_format: str | None = None,
     ) -> str:
-        """Run the model on `image` and return the assistant text."""
+        """Run the model on `image` and return the assistant text.
+
+        `response_format`: provider-defined hint for structured output. The
+        default `None` means "free-form text". Other values are
+        implementation-specific (e.g. `"json"` for ollama).
+        """
         ...
 
 

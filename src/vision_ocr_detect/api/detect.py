@@ -120,6 +120,28 @@ async def detect(
                 detail=f"profile '{profile}' not found",
             )
 
+        # --- apply profile_override (one-off; not persisted) ---
+        ov = parsed.profile_override
+        if ov is not None:
+            if ov.provider is not None and ov.provider != prof.provider:
+                # Cross-provider override: validate the new provider name.
+                if ov.provider not in settings.providers:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"profile_override.provider '{ov.provider}' "
+                            f"is not configured; available: "
+                            f"{sorted(settings.providers.keys())}"
+                        ),
+                    )
+            prof = prof.model_copy(
+                update={
+                    "provider": ov.provider if ov.provider is not None else prof.provider,
+                    "model": ov.model if ov.model is not None else prof.model,
+                    "prompt": ov.prompt if ov.prompt is not None else prof.prompt,
+                }
+            )
+
         # --- provider lookup ---
         try:
             provider: VisionProvider = registry.get(prof.provider)
@@ -140,6 +162,15 @@ async def detect(
             ) from e
 
         # --- model call ---
+        # temperature/seed: request-level beats profile_override beats None.
+        # (profile doesn't store these; only per-call.)
+        eff_temperature = parsed.temperature
+        eff_seed: int | None = None
+        if ov is not None:
+            if eff_temperature is None:
+                eff_temperature = ov.temperature
+            eff_seed = ov.seed
+
         try:
             text = await provider.detect(
                 processed.bytes,
@@ -147,7 +178,9 @@ async def detect(
                 prof.model,
                 prof.prompt,
                 max_tokens=parsed.max_tokens,
-                temperature=parsed.temperature,
+                temperature=eff_temperature,
+                seed=eff_seed,
+                response_format=parsed.response_format,
             )
         except Exception as e:
             raise HTTPException(
@@ -156,12 +189,25 @@ async def detect(
             ) from e
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        # Lenient JSON parse: only when response_format=json. Failures
+        # leave parsed=None and text untouched so clients can still
+        # see the raw output and decide what to do.
+        parsed_json: dict | None = None
+        if parsed.response_format == "json":
+            try:
+                candidate = json.loads(text)
+                if isinstance(candidate, dict):
+                    parsed_json = candidate
+            except (json.JSONDecodeError, ValueError):
+                parsed_json = None
+
         return DetectResponse(
             text=text,
             profile=prof.name,
             model=prof.model,
             provider=prof.provider,
             elapsed_ms=elapsed_ms,
+            parsed=parsed_json,
         )
     finally:
         semaphore.release()

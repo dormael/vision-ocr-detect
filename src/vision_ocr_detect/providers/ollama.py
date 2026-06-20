@@ -41,6 +41,8 @@ class OllamaProvider:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        seed: int | None = None,
+        response_format: str | None = None,
     ) -> str:
         headers: dict[str, str] = {}
         if self._config.api_key:
@@ -59,10 +61,17 @@ class OllamaProvider:
                 }
             ],
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if temperature is not None:
-            payload["temperature"] = temperature
+        if response_format is not None:
+            payload["format"] = response_format
+        if max_tokens is not None or temperature is not None or seed is not None:
+            options: dict[str, Any] = {}
+            if max_tokens is not None:
+                options["num_predict"] = max_tokens
+            if temperature is not None:
+                options["temperature"] = temperature
+            if seed is not None:
+                options["seed"] = seed
+            payload["options"] = options
 
         resp = await self._client.post(
             "/chat/completions", json=payload, headers=headers

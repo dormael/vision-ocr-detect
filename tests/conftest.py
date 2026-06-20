@@ -42,6 +42,8 @@ class FakeProvider:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        seed: int | None = None,
+        response_format: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -51,6 +53,8 @@ class FakeProvider:
                 "prompt": prompt,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
+                "seed": seed,
+                "response_format": response_format,
             }
         )
         return self.text
