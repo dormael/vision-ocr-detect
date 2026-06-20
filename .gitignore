@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# uv
+uv.lock
+
+# Runtime data (config + profiles are user-specific, don't commit)
+config.json
+profiles.json
+*.json.lock
+*.json.tmp
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Tooling state (claude / serena caches)
+.claude/
+.serena/

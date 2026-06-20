@@ -1,0 +1,31 @@
+[project]
+name = "vision-ocr-detect"
+version = "0.1.0"
+description = "HTTP API wrapping local ollama vision/OCR models with profile-driven prompts and image preprocessing"
+authors = [
+    { name = "Goohyun Chung", email = "dormael@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.138.0",
+    "httpx>=0.28.1",
+    "pillow>=12.2.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "python-multipart>=0.0.32",
+    "uvicorn[standard]>=0.49.0",
+]
+
+[project.scripts]
+vision-ocr-detect = "vision_ocr_detect:main"
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]
