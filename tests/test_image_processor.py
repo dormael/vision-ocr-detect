@@ -97,7 +97,7 @@ def test_format_converts_rgba_to_rgb_for_jpeg() -> None:
 
 
 def test_invalid_image_raises() -> None:
-    with pytest.raises(ImageProcessingError, match="could not identify"):
+    with pytest.raises(ImageProcessingError, match="could not decode"):
         process(b"not-an-image", ImageOptions())
 
 
@@ -106,3 +106,30 @@ def test_too_large_raises() -> None:
     raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * (21 * 1024 * 1024)
     with pytest.raises(ImageProcessingError, match="too large"):
         process(raw, ImageOptions())
+
+
+def test_animated_gif_uses_first_frame() -> None:
+    """Animated GIF: process() must extract the first frame, not corrupt or
+    refuse. Output is re-encoded to the chosen (or source) format."""
+    frames = [
+        Image.new("RGB", (32, 32), color=(255, 0, 0)),
+        Image.new("RGB", (32, 32), color=(0, 255, 0)),
+        Image.new("RGB", (32, 32), color=(0, 0, 255)),
+    ]
+    buf = io.BytesIO()
+    frames[0].save(
+        buf, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0
+    )
+    raw = buf.getvalue()
+
+    out = process(raw, ImageOptions())
+    # First frame is red; we can't directly inspect pixels in the encoded
+    # bytes, but we can confirm the output is a valid image of correct size.
+    # Default output format is PNG (vision-model friendly) regardless of
+    # source format.
+    assert (out.width, out.height) == (32, 32)
+    assert out.mime_type == "image/png"
+    # Round-trip the result and verify the first frame is the red one.
+    decoded = Image.open(io.BytesIO(out.bytes))
+    assert decoded.size == (32, 32)
+    assert decoded.convert("RGB").getpixel((16, 16)) == (255, 0, 0)

@@ -58,18 +58,29 @@ class ProcessedImage:
 
 def _decode(raw: bytes) -> Image.Image:
     try:
-        return Image.open(io.BytesIO(raw))
-    except UnidentifiedImageError as e:
-        raise ImageProcessingError("could not identify image format") from e
+        img = Image.open(io.BytesIO(raw))
+    except (UnidentifiedImageError, OSError) as e:
+        raise ImageProcessingError(f"could not decode image: {e}") from e
+    # Animated GIF: PIL exposes the first frame by default, but the underlying
+    # file handle is shared and may not survive serialization. Force a copy
+    # so subsequent operations don't touch the original buffer. `copy()` drops
+    # `format`, so remember and re-apply it.
+    if getattr(img, "is_animated", False):
+        img.seek(0)
+        copied = img.copy()
+        copied.format = img.format
+        img = copied
+    return img
 
 
 def _encode(img: Image.Image, fmt: str | None) -> tuple[bytes, str]:
     """Encode `img` to the target format. Returns (bytes, mime_type).
 
-    If `fmt` is None, re-encode in the source format (this strips metadata
-    and normalizes the payload — desirable when forwarding to a model).
+    If `fmt` is None, defaults to PNG. PNG is the safe universal choice for
+    vision models; even if the source is e.g. GIF (animated → static), we
+    re-encode to a single-frame format the model can handle.
     """
-    out_fmt = (fmt or img.format or "PNG").lower()
+    out_fmt = (fmt or "png").lower()
     pil_fmt = _FORMAT_TABLE.get(out_fmt)
     if pil_fmt is None:
         raise ImageProcessingError(f"unsupported output format '{out_fmt}'")

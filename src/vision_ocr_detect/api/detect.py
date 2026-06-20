@@ -64,7 +64,7 @@ async def detect(
     request: Request,
     image: UploadFile = File(
         ...,
-        description="Image file (PNG/JPEG/WebP). Max 20 MiB.",
+        description="Image file (PNG/JPEG/WebP/GIF). Max 20 MiB. Animated GIFs use the first frame.",
     ),
     profile: str = Form(
         ...,
