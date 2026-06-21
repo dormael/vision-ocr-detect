@@ -165,11 +165,12 @@ async def detect(
         # temperature/seed: request-level beats profile_override beats None.
         # (profile doesn't store these; only per-call.)
         eff_temperature = parsed.temperature
-        eff_seed: int | None = None
+        eff_seed = parsed.seed
         if ov is not None:
             if eff_temperature is None:
                 eff_temperature = ov.temperature
-            eff_seed = ov.seed
+            if eff_seed is None:
+                eff_seed = ov.seed
 
         try:
             text = await provider.detect(

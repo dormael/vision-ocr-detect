@@ -41,6 +41,7 @@ class DetectOptions(BaseModel):
     image: ImageOptions = Field(default_factory=ImageOptions)
     max_tokens: int | None = Field(default=None, gt=0, le=8192)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    seed: int | None = None
     profile_override: ProfileOverride | None = None
     # When set, the provider is asked to emit JSON. The server does NOT
     # validate against a specific schema (no jsonschema dependency) — it

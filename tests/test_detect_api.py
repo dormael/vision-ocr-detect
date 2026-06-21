@@ -332,3 +332,58 @@ def test_response_format_default_returns_null(client_with_fake) -> None:
     assert body["parsed"] is None
     assert body["text"] == '{"a": 1}'
     assert fake.calls[0]["response_format"] is None
+
+
+# ----------------------------------------------------------------------
+# top-level seed (Bug 6)
+# ----------------------------------------------------------------------
+
+
+def test_top_level_seed_forwarded_to_provider(client_with_fake) -> None:
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"seed": 42}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    assert fake.calls[0]["seed"] == 42
+
+
+def test_request_seed_beats_override_seed(client_with_fake) -> None:
+    """Request-level seed wins over profile_override.seed, like temperature."""
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "seed": 7,
+                "profile_override": {"seed": 99},
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert fake.calls[0]["seed"] == 7
+
+
+def test_override_seed_fills_when_request_omits(client_with_fake) -> None:
+    """Without top-level seed, profile_override.seed fills in."""
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"profile_override": {"seed": 99}}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert fake.calls[0]["seed"] == 99
