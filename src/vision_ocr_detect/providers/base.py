@@ -8,7 +8,32 @@ about HTTP, base64, or specific model APIs.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
+
+
+CapabilitySource = Literal["capabilities", "heuristic", "unknown"]
+
+
+class ModelInfo(BaseModel):
+    """Metadata about a model available through a provider.
+
+    `vision_capable` is the key field for clients — they can filter to
+    only the models that can accept image input. `source` records how we
+    arrived at that verdict so debugging is straightforward when a model
+    is mis-classified.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    family: str | None = None
+    parameter_size: str | None = None
+    quantization_level: str | None = None
+    context_length: int | None = None
+    vision_capable: bool
+    source: CapabilitySource
 
 
 @runtime_checkable
@@ -41,6 +66,19 @@ class VisionProvider(Protocol):
         `response_format`: provider-defined hint for structured output. The
         default `None` means "free-form text". Other values are
         implementation-specific (e.g. `"json"` for ollama).
+        """
+        ...
+
+    async def list_models(self) -> list[ModelInfo]:
+        """List models available through this provider with metadata.
+
+        Implementations should populate `vision_capable` from the provider's
+        authoritative capability signal when available (e.g. ollama's
+        `/api/tags` `capabilities` field). When not available, fall back
+        to a name-based heuristic and record the `source` accordingly so
+        callers can see which path was taken.
+
+        Raises on transport errors (the API layer maps these to 502).
         """
         ...
 

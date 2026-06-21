@@ -8,6 +8,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from vision_ocr_detect.api.detect import router as detect_router
+from vision_ocr_detect.api.models import router as models_router
 from vision_ocr_detect.api.profiles import router as profiles_router
 from vision_ocr_detect.config import Settings, load_settings
 from vision_ocr_detect.deps import get_profiles_path
@@ -63,16 +64,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, object]:
         s = settings or app.state.settings
+        # Best-effort: enumerate vision-capable model names per provider.
+        # Failures here must not 500 the health check.
+        vision_by_provider: dict[str, list[str]] = {}
+        registry = getattr(app.state, "provider_registry", None)
+        if registry is not None:
+            try:
+                models_all = await registry.list_models_all()
+                for pname, infos in models_all.items():
+                    vision_by_provider[pname] = sorted(
+                        m.name for m in infos if m.vision_capable
+                    )
+            except Exception:
+                pass
         return {
             "status": "ok",
             "providers": list(s.providers.keys()) if s else [],
             "profiles_loaded": len(app.state.profile_store.list())
             if getattr(app.state, "profile_store", None)
             else 0,
+            "vision_models": vision_by_provider,
         }
 
     app.include_router(profiles_router)
     app.include_router(detect_router)
+    app.include_router(models_router)
 
     return app
 

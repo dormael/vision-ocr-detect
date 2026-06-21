@@ -44,11 +44,19 @@ OpenAPI docs at `http://localhost:8000/docs`.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| `GET`    | `/api/profiles`         | — | list all |
+| `GET`    | `/api/profiles`         | — | list all (`?tag=<name>` filters by tag) |
 | `GET`    | `/api/profiles/{name}`  | — | one profile |
-| `POST`   | `/api/profiles`         | `{name, provider, model, prompt}` | 201 / 409 (dup) / 422 (bad name) / 400 (unknown provider) |
-| `PUT`    | `/api/profiles/{name}`  | partial `{provider?, model?, prompt?}` | 200 / 404 / 422 |
+| `POST`   | `/api/profiles`         | `{name, provider, model, prompt, description?, tags?}` | 201 / 409 (dup) / 422 (bad name / tags) / 400 (unknown provider) |
+| `PUT`    | `/api/profiles/{name}`  | partial `{provider?, model?, prompt?, description?, tags?}` | 200 / 404 / 422 (PATCH-style: omitted fields preserved) |
 | `DELETE` | `/api/profiles/{name}`  | — | 204 / 404 |
+
+Profile fields beyond `name/provider/model/prompt`:
+- `description: string | null` — free-text, max 500 chars
+- `tags: string[]` — max 20; each is lowercased alphanumeric + `-`/`_`, 1-32 chars; duplicates collapsed
+
+`tags` lets clients organize profiles (e.g. `["layout", "venue-kbs"]`) and
+filter via `GET /api/profiles?tag=layout`. Legacy profile JSON without
+these fields loads with `tags=[]`, `description=null`.
 
 ### Detect
 
@@ -140,8 +148,49 @@ Error codes: `404` (profile / image issue), `422` (bad options / image),
 
 ```
 GET /health
-→ {"status": "ok", "providers": ["local-ollama"], "profiles_loaded": 2}
+→ {
+    "status": "ok",
+    "providers": ["local-ollama"],
+    "profiles_loaded": 2,
+    "vision_models": {"local-ollama": ["qwen2.5vl:7b", "glm-ocr:latest"]}
+  }
 ```
+
+### Models
+
+```
+GET /api/models                            # all providers, all models
+GET /api/models?vision_only=true           # only vision-capable models
+GET /api/providers/{name}/models           # one provider, all models
+GET /api/providers/{name}/models?vision_only=true
+```
+
+Each model entry:
+
+```json
+{
+  "name": "qwen2.5vl:7b",
+  "family": "qwen25vl",
+  "parameter_size": "7B",
+  "quantization_level": "Q4_0",
+  "context_length": 8192,
+  "vision_capable": true,
+  "source": "capabilities"
+}
+```
+
+`vision_capable` classification:
+- `"capabilities"` — provider's authoritative signal (ollama ≥ 0.3.12
+  exposes a `capabilities` field on `/api/tags` listing `"vision"` when
+  applicable). Used as-is.
+- `"heuristic"` — provider didn't expose capabilities; we matched the
+  model name against conservative patterns (`*-vl*`, `llava*`,
+  `moondream`, `*-ocr`, etc.).
+- `"unknown"` — no capability signal and no name match → defaults to
+  not vision-capable.
+
+Useful for the interpark-ticket use case: filter `vision_only=true`
+to pick a layout-extraction candidate before saving a profile.
 
 ## End-to-end example
 

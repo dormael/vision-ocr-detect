@@ -19,7 +19,11 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from vision_ocr_detect.config import ProviderConfig, ServerConfig, Settings
-from vision_ocr_detect.providers.base import ProviderNotFound, VisionProvider
+from vision_ocr_detect.providers.base import (
+    ModelInfo,
+    ProviderNotFound,
+    VisionProvider,
+)
 from vision_ocr_detect.providers.registry import ProviderRegistry
 from vision_ocr_detect.services.profile_store import ProfileStore
 
@@ -27,11 +31,26 @@ from vision_ocr_detect.services.profile_store import ProfileStore
 class FakeProvider:
     """In-memory VisionProvider for tests. Records every call."""
 
-    def __init__(self, name: str, text: str = "fake-ocr-output") -> None:
+    def __init__(
+        self,
+        name: str,
+        text: str = "fake-ocr-output",
+        models: list[ModelInfo] | None = None,
+    ) -> None:
         self.name = name
         self.text = text
         self.calls: list[dict[str, object]] = []
         self.closed = False
+        # Default fixture: one vision + one non-vision model so tests can
+        # exercise both code paths without setting up an explicit list.
+        self.models: list[ModelInfo] = models if models is not None else [
+            ModelInfo(name="fake-vision:1b", vision_capable=True, source="heuristic"),
+            ModelInfo(name="fake-text:7b", vision_capable=False, source="heuristic"),
+        ]
+
+
+    async def list_models(self) -> list[ModelInfo]:  # type: ignore[override]
+        return list(self.models)
 
     async def detect(  # type: ignore[override]
         self,
