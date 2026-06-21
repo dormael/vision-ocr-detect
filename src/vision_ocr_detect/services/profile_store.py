@@ -41,9 +41,44 @@ class ProfileStore:
 
     # ----- public API -----
 
-    def list(self) -> list[Profile]:
+    def list(self, tag: str | None = None) -> list[Profile]:
+        """List profiles, optionally filtered by tag (OR match).
+
+        `tag` is lowercased before comparison; profile tags are already
+        lowercased at validation time so the comparison is straightforward.
+        Returns all profiles when `tag` is None or empty.
+        """
         self._ensure_loaded()
-        return list(self._cache.values())
+        all_profiles = list(self._cache.values())
+        if not tag:
+            return all_profiles
+        needle = tag.strip().lower()
+        return [p for p in all_profiles if needle in p.tags]
+
+    def update(self, name: str, **fields: object) -> Profile:
+        """Partial update: apply only the fields passed (None means "clear").
+
+        The API layer is responsible for filtering to fields the client
+        explicitly set in the request body (via `model_dump(exclude_unset=True)`).
+        Any non-None value here replaces the existing field value; None
+        replaces with the schema default (or null for optional fields).
+        """
+        # Only allow known fields to prevent surprises from arbitrary kwargs.
+        allowed_fields = {"provider", "model", "prompt", "description", "tags"}
+        unknown = set(fields) - allowed_fields
+        if unknown:
+            raise ValueError(f"unknown update fields: {sorted(unknown)}")
+
+        self._ensure_loaded()
+        with self._exclusive_lock():
+            current = self._cache.get(name)
+            if current is None:
+                raise ProfileNotFound(name)
+            updates: dict[str, object] = {"updated_at": utcnow(), **fields}
+            updated = current.model_copy(update=updates)
+            self._cache[name] = updated
+            self._flush_unlocked()
+        return updated
 
     def get(self, name: str) -> Profile:
         self._ensure_loaded()
@@ -60,31 +95,6 @@ class ProfileStore:
             self._cache[profile.name] = profile
             self._flush_unlocked()
         return profile
-
-    def update(
-        self,
-        name: str,
-        *,
-        provider: str | None = None,
-        model: str | None = None,
-        prompt: str | None = None,
-    ) -> Profile:
-        self._ensure_loaded()
-        with self._exclusive_lock():
-            current = self._cache.get(name)
-            if current is None:
-                raise ProfileNotFound(name)
-            updated = current.model_copy(
-                update={
-                    "provider": provider if provider is not None else current.provider,
-                    "model": model if model is not None else current.model,
-                    "prompt": prompt if prompt is not None else current.prompt,
-                    "updated_at": utcnow(),
-                }
-            )
-            self._cache[name] = updated
-            self._flush_unlocked()
-        return updated
 
     def delete(self, name: str) -> None:
         self._ensure_loaded()

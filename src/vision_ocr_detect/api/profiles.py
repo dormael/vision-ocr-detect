@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from vision_ocr_detect.deps import get_profile_store, get_provider_names
 from vision_ocr_detect.models.profile import (
@@ -31,9 +31,13 @@ def _validate_provider(provider: str, allowed: set[str]) -> None:
 
 @router.get("", response_model=list[Profile])
 def list_profiles(
+    tag: str | None = Query(
+        default=None,
+        description="Filter by tag (OR match). Lowercased before comparison.",
+    ),
     store: ProfileStore = Depends(get_profile_store),
 ) -> list[Profile]:
-    return store.list()
+    return store.list(tag=tag)
 
 
 @router.get("/{name}", response_model=Profile)
@@ -62,6 +66,8 @@ def create_profile(
         provider=body.provider,
         model=body.model,
         prompt=body.prompt,
+        description=body.description,
+        tags=body.tags,
         created_at=now,
         updated_at=now,
     )
@@ -81,15 +87,13 @@ def update_profile(
     store: ProfileStore = Depends(get_profile_store),
     allowed: set[str] = Depends(get_provider_names),
 ) -> Profile:
-    if body.provider is not None:
+    if "provider" in body.model_fields_set and body.provider is not None:
         _validate_provider(body.provider, allowed)
+    # PATCH-style semantics: only update fields the client explicitly sent.
+    # Omitting a field leaves it unchanged. Sending null/[] clears it.
+    provided = body.model_dump(exclude_unset=True)
     try:
-        return store.update(
-            name,
-            provider=body.provider,
-            model=body.model,
-            prompt=body.prompt,
-        )
+        return store.update(name, **provided)
     except ProfileNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"profile '{name}' not found"
