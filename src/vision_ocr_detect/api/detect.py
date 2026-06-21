@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -57,6 +58,25 @@ def _parse_options(raw: str | None) -> DetectOptions:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=e.errors(include_url=False),
         ) from e
+
+
+# Match a ```json ... ``` (or bare ``` ... ```) fence wrapping the entire
+# text. Captures the body so we can feed it to json.loads without mutating
+# the raw `text` field that callers still receive.
+_FENCE_RE = re.compile(
+    r"^\s*```(?:json|JSON)?\s*\n?(.*?)\n?\s*```\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_markdown_fence(text: str) -> str:
+    """Return the body of a markdown JSON fence, or the input unchanged.
+
+    Only strips a fence that wraps the *entire* string. The raw `text`
+    field is preserved — we don't mutate what the model returned.
+    """
+    m = _FENCE_RE.match(text)
+    return m.group(1) if m else text
 
 
 @router.post("/detect", response_model=DetectResponse)
@@ -192,11 +212,13 @@ async def detect(
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         # Lenient JSON parse: only when response_format=json. Failures
         # leave parsed=None and text untouched so clients can still
-        # see the raw output and decide what to do.
+        # see the raw output and decide what to do. We strip a wrapping
+        # ```json ... ``` fence before parsing (common VLM output) but
+        # never mutate `text` itself.
         parsed_json: dict | None = None
         if parsed.response_format == "json":
             try:
-                candidate = json.loads(text)
+                candidate = json.loads(_strip_markdown_fence(text))
                 if isinstance(candidate, dict):
                     parsed_json = candidate
             except (json.JSONDecodeError, ValueError):

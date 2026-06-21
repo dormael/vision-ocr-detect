@@ -335,6 +335,50 @@ def test_response_format_default_returns_null(client_with_fake) -> None:
 
 
 # ----------------------------------------------------------------------
+# markdown fence stripping in lenient parse (Bug 7)
+# ----------------------------------------------------------------------
+
+
+def test_response_format_strips_markdown_fence(client_with_fake) -> None:
+    """VLMs often wrap JSON in ```json ... ``` fences. The server strips
+    the fence before parsing so `parsed` is populated; the raw `text`
+    field is preserved unchanged."""
+    client, fake = client_with_fake
+    fake.text = '```json\n{"stage_location": "TOP", "sections": []}\n```'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["parsed"] == {"stage_location": "TOP", "sections": []}
+    # raw text must NOT be mutated — clients can still see the fence.
+    assert body["text"] == '```json\n{"stage_location": "TOP", "sections": []}\n```'
+
+
+def test_response_format_strips_bare_fence(client_with_fake) -> None:
+    """Bare ``` (no language tag) must also be stripped."""
+    client, fake = client_with_fake
+    fake.text = '```\n{"a": 1}\n```'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["parsed"] == {"a": 1}
+
+
+# ----------------------------------------------------------------------
 # top-level seed (Bug 6)
 # ----------------------------------------------------------------------
 
