@@ -395,6 +395,7 @@ async def detect(
             tokens_out=result.tokens_out,
             cost_usd=cost_usd,
             seed_used=result.seed_used,
+            endpoint_used=result.endpoint_used,
         )
     finally:
         semaphore.release()

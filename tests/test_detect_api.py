@@ -975,3 +975,140 @@ def test_cost_usd_computed_for_paid_provider(tmp_path, monkeypatch):
         # 1000/1000 * 0.002 = 0.002
         # Total = 0.004
         assert body["cost_usd"] == 0.004
+
+
+# ----------------------------------------------------------------------
+# OllamaProvider native-first / OpenAI-compat fallback (Option C)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_uses_native_endpoint_by_default(respx_mock):
+    """When /api/generate returns 200, we use it and report native."""
+    from vision_ocr_detect.config import ProviderConfig
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+
+    respx_mock.post("http://localhost:11434/api/generate").respond(
+        json={
+            "response": "hello",
+            "prompt_eval_count": 100,
+            "eval_count": 10,
+        }
+    )
+    p = OllamaProvider("local-ollama", ProviderConfig(
+        type="ollama", base_url="http://localhost:11434", timeout_seconds=5
+    ))
+    try:
+        result = await p.detect(b"img", "image/png", "m", "p")
+    finally:
+        await p.aclose()
+    assert result.text == "hello"
+    assert result.endpoint_used == "native"
+    assert result.tokens_in == 100
+    assert result.tokens_out == 10
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_falls_back_to_openai_compat_on_404(respx_mock):
+    """Native 404 → OpenAI-compat succeeds. result.endpoint_used='openai'."""
+    from vision_ocr_detect.config import ProviderConfig
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+
+    respx_mock.post("http://localhost:11434/api/generate").respond(404)
+    openai = respx_mock.post(
+        "http://localhost:11434/v1/chat/completions"
+    ).respond(
+        json={
+            "choices": [{"message": {"content": "fallback ok"}}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 5},
+        }
+    )
+    p = OllamaProvider("local-ollama", ProviderConfig(
+        type="ollama", base_url="http://localhost:11434", timeout_seconds=5
+    ))
+    try:
+        result = await p.detect(b"img", "image/png", "m", "p")
+    finally:
+        await p.aclose()
+    assert result.text == "fallback ok"
+    assert result.endpoint_used == "openai"
+    assert result.tokens_in == 50
+    assert result.tokens_out == 5
+    assert openai.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_falls_back_on_model_not_found_body(respx_mock):
+    """Some ollama builds return 200 + body.error='model \"x\" not found'.
+    Detect that and fall back to OpenAI-compat."""
+    from vision_ocr_detect.config import ProviderConfig
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+
+    respx_mock.post("http://localhost:11434/api/generate").respond(
+        400, json={"error": 'model "missing" not found, try pulling it first'}
+    )
+    respx_mock.post("http://localhost:11434/v1/chat/completions").respond(
+        json={"choices": [{"message": {"content": "from openai"}}]}
+    )
+    p = OllamaProvider("local-ollama", ProviderConfig(
+        type="ollama", base_url="http://localhost:11434", timeout_seconds=5
+    ))
+    try:
+        result = await p.detect(b"img", "image/png", "m", "p")
+    finally:
+        await p.aclose()
+    assert result.endpoint_used == "openai"
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_native_error_500_does_not_fallback(respx_mock):
+    """A non-404 / non-model-not-found error on native should NOT trigger
+    the fallback — it gets re-raised so the API layer returns 502."""
+    from vision_ocr_detect.config import ProviderConfig
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+
+    respx_mock.post("http://localhost:11434/api/generate").respond(500)
+    respx_mock.post("http://localhost:11434/v1/chat/completions").respond(200)
+    p = OllamaProvider("local-ollama", ProviderConfig(
+        type="ollama", base_url="http://localhost:11434", timeout_seconds=5
+    ))
+    try:
+        import httpx
+        with pytest.raises(httpx.HTTPStatusError):
+            await p.detect(b"img", "image/png", "m", "p")
+    finally:
+        await p.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_native_body_error_is_runtimeerror(respx_mock):
+    """A 200 + body.error='out of memory' should bubble up as RuntimeError,
+    NOT silently fall back to OpenAI-compat."""
+    from vision_ocr_detect.config import ProviderConfig
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+
+    respx_mock.post("http://localhost:11434/api/generate").respond(
+        200, json={"error": "out of memory", "response": ""}
+    )
+    respx_mock.post("http://localhost:11434/v1/chat/completions").respond(200)
+    p = OllamaProvider("local-ollama", ProviderConfig(
+        type="ollama", base_url="http://localhost:11434", timeout_seconds=5
+    ))
+    try:
+        with pytest.raises(RuntimeError, match="out of memory"):
+            await p.detect(b"img", "image/png", "m", "p")
+    finally:
+        await p.aclose()
+
+
+def test_response_includes_endpoint_used(client_with_fake):
+    client, _ = client_with_fake
+    # client_with_fake's FakeProvider defaults to endpoint_used="fake"
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr"},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["endpoint_used"] == "fake"

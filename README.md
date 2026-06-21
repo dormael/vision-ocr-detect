@@ -176,6 +176,12 @@ The `tokens_in/out`, `cost_usd`, `seed_used` fields are best-effort:
   swap in a paid provider.
 - `seed_used` — the seed actually forwarded to the provider, or `null`
   if neither the request nor `profile_override` set one.
+- `endpoint_used` — `"native"` if the call went through ollama's
+  `/api/generate` surface; `"openai"` if the native endpoint 404'd
+  and we fell back to `/v1/chat/completions`. Most ollama vision
+  models (granite-vision, minicpm-v, qwen2.5vl, etc.) work on the
+  native surface; the fallback exists for models that only speak
+  OpenAI-compat.
 
 Error codes: `404` (profile / image issue), `422` (bad options / image),
 `502` (provider failure), `503` (concurrency cap reached, with

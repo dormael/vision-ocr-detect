@@ -97,3 +97,7 @@ class DetectResponse(BaseModel):
     tokens_out: int | None = None
     cost_usd: float | None = None
     seed_used: int | None = None
+    # Records which underlying API the provider used when it had a
+    # choice (e.g. ollama "native" /api/generate vs "openai" OpenAI-compat
+    # chat endpoint). None when there's no choice to make.
+    endpoint_used: str | None = None

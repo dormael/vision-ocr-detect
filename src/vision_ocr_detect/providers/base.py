@@ -49,12 +49,17 @@ class ProviderResult:
     When the caller passed a seed, that value; when the provider picked
     its own (e.g. ollama with no seed given), whatever the provider
     echoes back; None when neither is available.
+
+    `endpoint_used` records which underlying API the provider called
+    when it has a choice (e.g. ollama's `/api/generate` vs
+    `/v1/chat/completions`). None when there's no choice to make.
     """
 
     text: str
     tokens_in: int | None = None
     tokens_out: int | None = None
     seed_used: int | None = None
+    endpoint_used: str | None = None
 
 
 @runtime_checkable

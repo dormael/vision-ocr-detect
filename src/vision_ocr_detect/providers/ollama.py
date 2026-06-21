@@ -48,6 +48,13 @@ _VISION_NAME_PATTERNS: tuple[str, ...] = (
     # catch unrelated "ocr" substrings in unrelated names.
     r"(^|-)ocr(-|$|:)",
 )
+
+
+class _ShouldFallbackToOpenAICompat(Exception):
+    """Internal signal: the native /api/generate path can't serve this
+    model (404 or model-not-found). The caller should try the OpenAI-
+    compat surface once before giving up.
+    """
 _VISION_NAME_RES = tuple(re.compile(p, re.IGNORECASE) for p in _VISION_NAME_PATTERNS)
 
 
@@ -100,6 +107,126 @@ class OllamaProvider:
         seed: int | None = None,
         response_format: str | dict | None = None,
     ) -> ProviderResult:
+        """Run the model with native-first / OpenAI-compat fallback.
+
+        Strategy (Option C, agreed with the requester):
+          1. Try ollama's native /api/generate. All current ollama
+             models — including vision-only ones like granite-vision
+             and minicpm-v that the OpenAI-compat surface rejects with
+             'illegal base64 data' — work here.
+          2. On a 404 (or model-not-found in the body), fall back to
+             the OpenAI-compat /v1/chat/completions surface. This
+             covers edge cases where a future ollama version or a
+             non-ollama server speaks only OpenAI-compat.
+          3. Anything else re-raises; the API layer maps to 502.
+
+        Records which endpoint succeeded in `result.endpoint_used`
+        for downstream observability.
+        """
+        try:
+            return await self._detect_native(
+                image, mime_type, model, prompt,
+                max_tokens=max_tokens, temperature=temperature,
+                seed=seed, response_format=response_format,
+            )
+        except _ShouldFallbackToOpenAICompat:
+            return await self._detect_openai_compat(
+                image, mime_type, model, prompt,
+                max_tokens=max_tokens, temperature=temperature,
+                seed=seed, response_format=response_format,
+            )
+
+    async def _detect_native(
+        self,
+        image: bytes,
+        mime_type: str,
+        model: str,
+        prompt: str,
+        *,
+        max_tokens: int | None,
+        temperature: float | None,
+        seed: int | None,
+        response_format: str | dict | None,
+    ) -> ProviderResult:
+        """Call ollama's native /api/generate (single-prompt shape)."""
+        image_b64 = base64.b64encode(image).decode("ascii")
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+        }
+        # Note: native ollama doesn't accept the OpenAI-style
+        # `format` key for json_schema. The OpenAI-compat surface does.
+        # For native we only forward "json" (not full schema objects);
+        # structured-output guarantees are stricter on /v1/chat/completions.
+        if response_format == "json":
+            payload["format"] = "json"
+        if max_tokens is not None or temperature is not None or seed is not None:
+            options: dict[str, Any] = {}
+            if max_tokens is not None:
+                options["num_predict"] = max_tokens
+            if temperature is not None:
+                options["temperature"] = temperature
+            if seed is not None:
+                options["seed"] = seed
+            payload["options"] = options
+
+        resp = await self._client.post(
+            f"{self._base_url}/api/generate", json=payload
+        )
+        # 404 / model_not_found → ask the caller to try OpenAI-compat.
+        if resp.status_code == 404:
+            raise _ShouldFallbackToOpenAICompat(
+                f"native /api/generate returned 404 for model {model!r}"
+            )
+        # ollama surfaces model-not-found as 200 + body.error in some
+        # builds. Detect that case too.
+        if resp.status_code == 400:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and "model" in str(body.get("error", "")).lower():
+                raise _ShouldFallbackToOpenAICompat(
+                    f"native /api/generate: model not found: {body}"
+                )
+        resp.raise_for_status()
+        body = resp.json()
+        if isinstance(body, dict) and body.get("error"):
+            # Some ollama versions return 200 + body.error for unsupported
+            # operations. Treat as a hard failure rather than a fallback
+            # trigger — this isn't a 'model not found' case.
+            raise RuntimeError(f"ollama native error: {body['error']}")
+
+        text = body.get("response", "")
+        if not isinstance(text, str):
+            raise RuntimeError(
+                f"unexpected ollama native response shape: {body!r}"
+            )
+
+        # Usage: native ollama reports prompt_eval_count / eval_count.
+        return ProviderResult(
+            text=text,
+            tokens_in=body.get("prompt_eval_count"),
+            tokens_out=body.get("eval_count"),
+            seed_used=seed,
+            endpoint_used="native",
+        )
+
+    async def _detect_openai_compat(
+        self,
+        image: bytes,
+        mime_type: str,
+        model: str,
+        prompt: str,
+        *,
+        max_tokens: int | None,
+        temperature: float | None,
+        seed: int | None,
+        response_format: str | dict | None,
+    ) -> ProviderResult:
+        """Call ollama's OpenAI-compatible /v1/chat/completions surface."""
         headers: dict[str, str] = {}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
@@ -119,8 +246,8 @@ class OllamaProvider:
         }
         if response_format is not None:
             # ollama accepts either a string ("json") or a JSON Schema
-            # dict directly under `format`. We pass it through unchanged
-            # so callers can opt into either of:
+            # dict directly under `format`. Pass through unchanged so
+            # callers can use either of:
             #   response_format="json"
             #   response_format={"type": "json_schema", ...}
             payload["format"] = response_format
@@ -146,20 +273,13 @@ class OllamaProvider:
                 f"unexpected ollama response shape: {body!r}"
             ) from e
 
-        # Usage stats: ollama exposes `usage` on the OpenAI-compat surface
-        # in recent builds. Field names follow the OpenAI convention.
         usage = body.get("usage") or {}
-        tokens_in = usage.get("prompt_tokens")
-        tokens_out = usage.get("completion_tokens")
-
-        # seed_used: ollama doesn't echo the seed back, so we just record
-        # what we sent. (A future native-endpoint client could compare
-        # against the response's `seed` field.)
         return ProviderResult(
             text=text,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
+            tokens_in=usage.get("prompt_tokens"),
+            tokens_out=usage.get("completion_tokens"),
             seed_used=seed,
+            endpoint_used="openai",
         )
 
     async def aclose(self) -> None:

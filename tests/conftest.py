@@ -39,6 +39,7 @@ class FakeProvider:
         models: list[ModelInfo] | None = None,
         tokens_in: int | None = None,
         tokens_out: int | None = None,
+        endpoint_used: str | None = "fake",
     ) -> None:
         self.name = name
         self.text = text
@@ -46,6 +47,7 @@ class FakeProvider:
         self.closed = False
         self._tokens_in = tokens_in
         self._tokens_out = tokens_out
+        self._endpoint_used = endpoint_used
         # Default fixture: one vision + one non-vision model so tests can
         # exercise both code paths without setting up an explicit list.
         self.models: list[ModelInfo] = models if models is not None else [
@@ -86,6 +88,7 @@ class FakeProvider:
             tokens_in=self._tokens_in,
             tokens_out=self._tokens_out,
             seed_used=seed,
+            endpoint_used=self._endpoint_used,
         )
 
     async def aclose(self) -> None:
