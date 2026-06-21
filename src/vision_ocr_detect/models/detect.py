@@ -15,6 +15,38 @@ from pydantic import BaseModel, ConfigDict, Field
 from vision_ocr_detect.models.image import ImageOptions
 
 
+class JsonSchemaSpec(BaseModel):
+    """JSON Schema for response_format=json_schema.
+
+    Mirrors the OpenAI-style `json_schema` object. We accept an arbitrary
+    JSON Schema dict — the server validates the model's output against it
+    when present (best-effort; relies on the `jsonschema` library).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    schema_: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="schema",
+        description="JSON Schema object (https://json-schema.org/).",
+    )
+    strict: bool = True
+
+
+class JsonSchemaResponseFormat(BaseModel):
+    """OpenAI-style structured-output request.
+
+    Example:
+        {"type": "json_schema", "json_schema": {"name": "seat_layout", "schema": {...}}}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["json_schema"]
+    json_schema: JsonSchemaSpec
+
+
 class ProfileOverride(BaseModel):
     """Per-call overrides on the resolved profile.
 
@@ -43,11 +75,13 @@ class DetectOptions(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     seed: int | None = None
     profile_override: ProfileOverride | None = None
-    # When set, the provider is asked to emit JSON. The server does NOT
-    # validate against a specific schema (no jsonschema dependency) — it
-    # only parses `text` best-effort into `parsed`. If the model returns
-    # invalid JSON, `parsed` is null and `text` still holds the raw output.
-    response_format: Literal["json"] | None = None
+    # Three accepted shapes:
+    #   - None (default): free-form text
+    #   - "json": provider is asked to emit JSON; server parses leniently.
+    #   - {type: "json_schema", json_schema: {...}}: server validates the
+    #     model's output against the supplied JSON Schema. If validation
+    #     fails, the request returns 422 with the schema error detail.
+    response_format: Literal["json"] | JsonSchemaResponseFormat | None = None
 
 
 class DetectResponse(BaseModel):

@@ -24,7 +24,11 @@ from pydantic import ValidationError
 
 from vision_ocr_detect.config import Settings
 from vision_ocr_detect.deps import get_provider_registry, get_profile_store, get_settings
-from vision_ocr_detect.models.detect import DetectOptions, DetectResponse
+from vision_ocr_detect.models.detect import (
+    DetectOptions,
+    DetectResponse,
+    JsonSchemaResponseFormat,
+)
 from vision_ocr_detect.providers.base import VisionProvider
 from vision_ocr_detect.providers.registry import ProviderRegistry
 from vision_ocr_detect.services.image_processor import (
@@ -77,6 +81,47 @@ def _strip_markdown_fence(text: str) -> str:
     """
     m = _FENCE_RE.match(text)
     return m.group(1) if m else text
+
+
+def _validate_against_schema(
+    candidate: dict, schema: dict
+) -> dict | None:
+    """Validate `candidate` against a JSON Schema. Return the (possibly
+    unchanged) dict on success, or None on validation failure.
+
+    Uses the `jsonschema` library with the Draft 2020-12 validator when
+    available; falls back to Draft 7 if the schema doesn't declare a
+    $schema (the most permissive default).
+    """
+    from jsonschema import Draft202012Validator, Draft7Validator
+    from jsonschema.exceptions import SchemaError, ValidationError
+
+    if not schema:
+        # No schema given — accept anything (parsed must be a dict already).
+        return candidate
+
+    # Pick a validator that matches the schema's $schema, if any.
+    decl = schema.get("$schema", "")
+    try:
+        if "2020-12" in decl:
+            validator_cls = Draft202012Validator
+        else:
+            validator_cls = Draft7Validator
+    except Exception:
+        validator_cls = Draft7Validator
+
+    try:
+        validator_cls.check_schema(schema)
+    except SchemaError:
+        # The schema itself is invalid — treat as no schema (best-effort).
+        return candidate
+
+    validator = validator_cls(schema)
+    try:
+        validator.validate(candidate)
+        return candidate
+    except ValidationError:
+        return None
 
 
 @router.post("/detect", response_model=DetectResponse)
@@ -192,6 +237,20 @@ async def detect(
             if eff_seed is None:
                 eff_seed = ov.seed
 
+        # Normalize response_format for the provider:
+        #   - None → None
+        #   - "json" → "json"
+        #   - {type: "json_schema", ...} → the dict as-is (ollama accepts it)
+        provider_format: str | dict | None
+        if parsed.response_format is None:
+            provider_format = None
+        elif isinstance(parsed.response_format, str):
+            provider_format = parsed.response_format
+        else:  # JsonSchemaResponseFormat
+            provider_format = parsed.response_format.model_dump(
+                mode="json", by_alias=True
+            )
+
         try:
             text = await provider.detect(
                 processed.bytes,
@@ -201,7 +260,7 @@ async def detect(
                 max_tokens=parsed.max_tokens,
                 temperature=eff_temperature,
                 seed=eff_seed,
-                response_format=parsed.response_format,
+                response_format=provider_format,
             )
         except Exception as e:
             raise HTTPException(
@@ -210,19 +269,45 @@ async def detect(
             ) from e
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        # Lenient JSON parse: only when response_format=json. Failures
-        # leave parsed=None and text untouched so clients can still
-        # see the raw output and decide what to do. We strip a wrapping
-        # ```json ... ``` fence before parsing (common VLM output) but
-        # never mutate `text` itself.
+        # Parse + validate. Three modes:
+        #   - None → parsed=None unconditionally
+        #   - "json" → lenient parse; on failure parsed=None, text preserved
+        #   - json_schema → parse + schema validation; either failure → 422
         parsed_json: dict | None = None
-        if parsed.response_format == "json":
+        rf = parsed.response_format
+        if rf is not None:
+            stripped = _strip_markdown_fence(text)
             try:
-                candidate = json.loads(_strip_markdown_fence(text))
-                if isinstance(candidate, dict):
-                    parsed_json = candidate
+                candidate = json.loads(stripped)
             except (json.JSONDecodeError, ValueError):
-                parsed_json = None
+                candidate = None
+            if isinstance(candidate, dict):
+                if isinstance(rf, JsonSchemaResponseFormat):
+                    parsed_json = _validate_against_schema(
+                        candidate, rf.json_schema.schema_
+                    )
+                    if parsed_json is None:
+                        # Schema mismatch → 422.
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=(
+                                f"model output did not match response_format."
+                                f"json_schema; raw={text!r}"
+                            ),
+                        )
+                else:
+                    parsed_json = candidate
+            else:
+                # JSON parse failed (or result wasn't a dict).
+                if isinstance(rf, JsonSchemaResponseFormat):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=(
+                            f"response_format=json_schema requires valid JSON "
+                            f"object output; raw={text!r}"
+                        ),
+                    )
+                # "json" mode: lenient → parsed=None is acceptable.
 
         return DetectResponse(
             text=text,

@@ -116,6 +116,26 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
   JSON. The server attempts a lenient `json.loads` on the response and
   populates `parsed` on success; if parsing fails, `parsed` is `null` and
   `text` still holds the raw output (the client decides what to do).
+  Alternatively, an OpenAI-style structured-output spec can be supplied:
+
+  ```json
+  {
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "seat_layout",
+        "schema": { "type": "object", "properties": {...}, "required": [...] }
+      }
+    }
+  }
+  ```
+
+  In `json_schema` mode the server passes the spec to the provider as a
+  structured-output constraint and validates the response against the
+  schema using the `jsonschema` library. Both JSON parse failure and
+  schema mismatch return **422** with the raw text in the error
+  detail — clients should treat this as a hard failure and retry with
+  a different model or prompt, not silently accept `parsed: null`.
 - `profile_override`: per-call override of the resolved profile. Unset
   fields fall back to the profile's value. `provider` is re-validated
   against the configured providers (400 on unknown). `temperature` is

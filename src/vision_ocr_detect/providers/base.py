@@ -59,13 +59,14 @@ class VisionProvider(Protocol):
         max_tokens: int | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        response_format: str | None = None,
+        response_format: str | dict | None = None,
     ) -> str:
         """Run the model on `image` and return the assistant text.
 
         `response_format`: provider-defined hint for structured output. The
-        default `None` means "free-form text". Other values are
-        implementation-specific (e.g. `"json"` for ollama).
+        default `None` means "free-form text". Implementations accept
+        either a string hint (`"json"`) or a structured spec dict (e.g.
+        OpenAI-style `{type: "json_schema", json_schema: {...}}`).
         """
         ...
 

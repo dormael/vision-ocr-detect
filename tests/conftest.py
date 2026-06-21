@@ -62,7 +62,7 @@ class FakeProvider:
         max_tokens: int | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        response_format: str | None = None,
+        response_format: str | dict | None = None,
     ) -> str:
         self.calls.append(
             {

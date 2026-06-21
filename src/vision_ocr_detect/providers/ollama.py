@@ -94,7 +94,7 @@ class OllamaProvider:
         max_tokens: int | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        response_format: str | None = None,
+        response_format: str | dict | None = None,
     ) -> str:
         headers: dict[str, str] = {}
         if self._config.api_key:
@@ -114,6 +114,11 @@ class OllamaProvider:
             ],
         }
         if response_format is not None:
+            # ollama accepts either a string ("json") or a JSON Schema
+            # dict directly under `format`. We pass it through unchanged
+            # so callers can opt into either of:
+            #   response_format="json"
+            #   response_format={"type": "json_schema", ...}
             payload["format"] = response_format
         if max_tokens is not None or temperature is not None or seed is not None:
             options: dict[str, Any] = {}

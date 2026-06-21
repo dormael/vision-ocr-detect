@@ -143,6 +143,12 @@ def test_detect_provider_failure_returns_502(client_with_fake) -> None:
         async def detect(self, *args, **kwargs):
             raise RuntimeError("upstream down")
 
+        async def list_models(self):
+            raise RuntimeError("upstream down")
+
+        async def aclose(self):
+            pass
+
     # Swap the fake registry via the same override mechanism.
     from vision_ocr_detect import deps as deps_mod
     from vision_ocr_detect.providers.registry import ProviderRegistry
@@ -431,3 +437,207 @@ def test_override_seed_fills_when_request_omits(client_with_fake) -> None:
     )
     assert r.status_code == 200
     assert fake.calls[0]["seed"] == 99
+
+
+# ----------------------------------------------------------------------
+# response_format = json_schema (full OpenAI-style structured output)
+# ----------------------------------------------------------------------
+
+
+def test_response_format_json_schema_validates_payload(client_with_fake) -> None:
+    """Schema-conformant output → parsed populated, provider sees dict form."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {
+            "stage_location": {"type": "string", "enum": ["TOP", "BOTTOM"]},
+            "sections": {"type": "array", "items": {"type": "object"}},
+        },
+        "required": ["stage_location", "sections"],
+    }
+    fake.text = '{"stage_location": "TOP", "sections": []}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "layout", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["parsed"] == {"stage_location": "TOP", "sections": []}
+    # raw text preserved
+    assert body["text"] == '{"stage_location": "TOP", "sections": []}'
+    # Provider received the dict form (not a string), so ollama can use
+    # it as a structured-output constraint.
+    rf = fake.calls[0]["response_format"]
+    assert isinstance(rf, dict)
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["name"] == "layout"
+
+
+def test_response_format_json_schema_validation_failure_returns_422(client_with_fake) -> None:
+    """Output that doesn't match the schema → 422 with raw text in detail."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {"stage_location": {"type": "string"}},
+        "required": ["stage_location"],
+    }
+    # Missing required field "stage_location" AND extra unknown field.
+    fake.text = '{"unrelated": "value"}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "layout", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+    body = r.json()
+    assert "raw" in body["detail"]  # raw text included for debugging
+    assert "unrelated" in body["detail"]
+
+
+def test_response_format_json_schema_strips_markdown_fence(client_with_fake) -> None:
+    """```json ... ``` wrappers are stripped before schema validation."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
+    fake.text = '```json\n{"ok": true}\n```'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["parsed"] == {"ok": True}
+
+
+def test_response_format_json_schema_invalid_json_returns_422(client_with_fake) -> None:
+    """JSON parse failure with json_schema → 422 (not silent null)."""
+    client, fake = client_with_fake
+    fake.text = "not even json {"
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": {"type": "object"}},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_response_format_json_schema_accepts_complex_schema(client_with_fake) -> None:
+    """Realistic seat_layout schema from the feature request."""
+    client, fake = client_with_fake
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "stage_location": {
+                "type": "string",
+                "enum": ["TOP", "BOTTOM", "LEFT", "RIGHT", "CENTER"],
+            },
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "distance_tier": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "horizontal_alignment": {"type": "integer"},
+                        "floor": {"type": "string", "enum": ["FLOOR", "2F", "3F"]},
+                        "diagonal_tier": {"type": "integer", "minimum": 0, "maximum": 3},
+                    },
+                    "required": ["name", "distance_tier", "horizontal_alignment", "floor"],
+                },
+            },
+        },
+        "required": ["stage_location", "sections"],
+    }
+    fake.text = json.dumps({
+        "stage_location": "TOP",
+        "sections": [
+            {"name": "S1", "distance_tier": 1, "horizontal_alignment": -1, "floor": "FLOOR"},
+            {"name": "211", "distance_tier": 2, "horizontal_alignment": 0, "floor": "2F"},
+        ],
+    })
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "seat_layout", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["parsed"]["stage_location"] == "TOP"
+    assert len(body["parsed"]["sections"]) == 2
+
+
+def test_response_format_json_schema_invalid_schema_falls_back(client_with_fake) -> None:
+    """A malformed $schema object → server accepts the dict as best-effort
+    rather than rejecting the request outright. The 'strict' validation
+    is best-effort by design."""
+    client, fake = client_with_fake
+    fake.text = '{"anything": "goes"}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": {"type": "invalid-type"}},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    # Malformed schema → server returns 200 with parsed populated
+    # (we treat 'invalid schema' as 'no validation applied' to avoid
+    # blocking the request on a server-side config issue).
+    assert r.status_code == 200, r.text
+    assert r.json()["parsed"] == {"anything": "goes"}
