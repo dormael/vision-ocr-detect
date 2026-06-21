@@ -72,6 +72,11 @@ def _decode(raw: bytes) -> Image.Image:
         copied = img.copy()
         copied.format = img.format
         img = copied
+    # Convert palette-mode images (GIF, palette PNG) to RGB. ImageEnhance and
+    # most ImageFilter operations reject "P" mode with "image has wrong mode";
+    # vision models consume RGB anyway, so flattening the palette is harmless.
+    if img.mode == "P":
+        img = img.convert("RGB")
     return img
 
 

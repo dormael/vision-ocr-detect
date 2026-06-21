@@ -142,6 +142,35 @@ def test_animated_gif_uses_first_frame() -> None:
     assert decoded.convert("RGB").getpixel((16, 16)) == (255, 0, 0)
 
 
+def test_palette_gif_with_preprocess_does_not_raise() -> None:
+    """GIF inputs land in PIL mode "P". ImageEnhance and ImageFilter reject
+    "P" with "image has wrong mode"; _decode must flatten the palette to RGB
+    so subsequent preprocess stages (sharpen/contrast/brightness/binarize)
+    can run without raising."""
+    img = Image.new("RGB", (32, 32), color=(180, 60, 60))
+    buf = io.BytesIO()
+    img.save(buf, format="GIF")  # GIF save forces palette mode
+    raw = buf.getvalue()
+
+    # All four preprocess operations must succeed on a palette-mode input.
+    out = process(
+        raw,
+        ImageOptions(
+            preprocess=ImagePreprocess(
+                sharpen=SharpenSpec(sigma=1.0),
+                contrast=1.2,
+                brightness=1.1,
+                binarize=BinarizeSpec(threshold=128),
+            )
+        ),
+    )
+    assert (out.width, out.height) == (32, 32)
+    assert out.mime_type == "image/png"
+    # And the output must be decodable RGB.
+    decoded = Image.open(io.BytesIO(out.bytes))
+    assert decoded.mode in ("RGB", "RGBA", "L")
+
+
 # ----------------------------------------------------------------------
 # preprocess (sharpen / contrast / brightness / binarize)
 # ----------------------------------------------------------------------
