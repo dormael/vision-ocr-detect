@@ -83,6 +83,58 @@ def _strip_markdown_fence(text: str) -> str:
     return m.group(1) if m else text
 
 
+# VLM-friendly JSON normalizations applied to a working copy of the text
+# before feeding it to json.loads. The raw `text` field in the response
+# stays exactly as the model returned it; these only affect `parsed`.
+#
+# Why these specific patterns:
+#   - ": +N"  — leading plus on integers. Python's json.loads rejects per
+#     RFC 8259, but VLMs emit it from coordinate/offset math.
+#   - ", }" or ", ]" — trailing comma before closing bracket. Some VLMs
+#     add the comma after every entry without checking the last one.
+#   - ",," — accidental double comma. We collapse to a single comma.
+#   - "'' <key>': None"  — unquoted keys aren't handled here; those
+#     remain a hard failure (rare in practice).
+_PLUS_INT_RE = re.compile(r"(?<![\w.\"])\+(\d)")
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+_DOUBLE_COMMA_RE = re.compile(r",\s*,")
+
+
+def _normalize_json_quirks(text: str) -> str:
+    """Best-effort cleanup of common VLM JSON output quirks.
+
+    Operates on a copy. The raw response `text` field is preserved so
+    clients can still see what the model emitted.
+    """
+    s = _PLUS_INT_RE.sub(r"\1", text)
+    s = _DOUBLE_COMMA_RE.sub(",", s)
+    s = _TRAILING_COMMA_RE.sub(r"\1", s)
+    return s
+
+
+def _lenient_parse_json(text: str) -> dict | None:
+    """Try to parse `text` as a JSON object, tolerating common VLM quirks.
+
+    Order of operations:
+      1. Strip a wrapping ```json ... ``` markdown fence (if any).
+      2. Apply small normalizations for `+N`, trailing commas, double
+         commas. These are best-effort — a model that produces truly
+         broken JSON still ends up with parsed=None.
+      3. json.loads. Returns None on any failure.
+
+    The raw `text` returned to the client is unchanged.
+    """
+    body = _strip_markdown_fence(text)
+    body = _normalize_json_quirks(body)
+    try:
+        candidate = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(candidate, dict):
+        return None
+    return candidate
+
+
 def _validate_against_schema(
     candidate: dict, schema: dict
 ) -> dict | None:
@@ -271,16 +323,13 @@ async def detect(
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         # Parse + validate. Three modes:
         #   - None → parsed=None unconditionally
-        #   - "json" → lenient parse; on failure parsed=None, text preserved
+        #   - "json" → lenient parse (fence + `+`/comma quirks); on
+        #               failure parsed=None, text preserved
         #   - json_schema → parse + schema validation; either failure → 422
         parsed_json: dict | None = None
         rf = parsed.response_format
         if rf is not None:
-            stripped = _strip_markdown_fence(text)
-            try:
-                candidate = json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
-                candidate = None
+            candidate = _lenient_parse_json(text)
             if isinstance(candidate, dict):
                 if isinstance(rf, JsonSchemaResponseFormat):
                     parsed_json = _validate_against_schema(
@@ -297,17 +346,17 @@ async def detect(
                         )
                 else:
                     parsed_json = candidate
-            else:
-                # JSON parse failed (or result wasn't a dict).
-                if isinstance(rf, JsonSchemaResponseFormat):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=(
-                            f"response_format=json_schema requires valid JSON "
-                            f"object output; raw={text!r}"
-                        ),
-                    )
-                # "json" mode: lenient → parsed=None is acceptable.
+            elif isinstance(rf, JsonSchemaResponseFormat):
+                # JSON parse failed (or result wasn't a dict) under
+                # json_schema mode → 422 with raw text for debugging.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"response_format=json_schema requires valid JSON "
+                        f"object output; raw={text!r}"
+                    ),
+                )
+            # "json" mode: lenient → parsed=None is acceptable on failure.
 
         return DetectResponse(
             text=text,

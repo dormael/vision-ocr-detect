@@ -113,9 +113,13 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
 - `image.resize.background`: hex color (`#rgb` / `#rrggbb` / `#rrggbbaa`),
   only used when `fit: "contain"`. Defaults to `#ffffff`.
 - `response_format`: when set to `"json"`, the provider is asked to emit
-  JSON. The server attempts a lenient `json.loads` on the response and
-  populates `parsed` on success; if parsing fails, `parsed` is `null` and
-  `text` still holds the raw output (the client decides what to do).
+  JSON. The server runs a **lenient JSON parser** that strips a wrapping
+  ```json ... ``` markdown fence and normalizes common VLM quirks
+  (`: +N` signed integers, trailing commas, double commas) before
+  `json.loads`. `parsed` is populated on success; on failure, `parsed` is
+  `null` and `text` still holds the raw output (the client can decide
+  whether to retry or fall back to its own parser). The `text` field is
+  never mutated.
   Alternatively, an OpenAI-style structured-output spec can be supplied:
 
   ```json

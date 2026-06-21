@@ -641,3 +641,140 @@ def test_response_format_json_schema_invalid_schema_falls_back(client_with_fake)
     # blocking the request on a server-side config issue).
     assert r.status_code == 200, r.text
     assert r.json()["parsed"] == {"anything": "goes"}
+
+
+# ----------------------------------------------------------------------
+# lenient JSON parser — production-grade quirk tolerance
+# ----------------------------------------------------------------------
+
+
+def test_response_format_json_normalizes_plus_signed_int(client_with_fake) -> None:
+    """': +N' is rejected by json.loads per RFC 8259, but VLMs emit it
+    from coordinate math. The lenient parser must drop the leading plus."""
+    client, fake = client_with_fake
+    fake.text = '{"stage_location": "TOP", "alignment": +2, "offset": +0}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["parsed"] == {"stage_location": "TOP", "alignment": 2, "offset": 0}
+    # raw text untouched
+    assert body["text"] == fake.text
+
+
+def test_response_format_json_normalizes_trailing_comma(client_with_fake) -> None:
+    client, fake = client_with_fake
+    fake.text = '{"a": 1, "b": [1, 2, 3,],}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["parsed"] == {"a": 1, "b": [1, 2, 3]}
+
+
+def test_response_format_json_normalizes_double_comma(client_with_fake) -> None:
+    client, fake = client_with_fake
+    fake.text = '{"a": 1,, "b": 2}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["parsed"] == {"a": 1, "b": 2}
+
+
+def test_response_format_json_fence_plus_combo(client_with_fake) -> None:
+    """Realistic VLM output: fence + signed ints + trailing comma.
+
+    This is the case the requester reported as 'Bug 7 not working'
+    in feature-bugs-followup.md — the actual root cause is the signed
+    integer, not the fence strip (which works)."""
+    client, fake = client_with_fake
+    fake.text = (
+        '```json\n'
+        '{"stage_location": "TOP", "sections": [\n'
+        '  {"name": "S1", "alignment": +2, "tier": 1,},\n'
+        '  {"name": "S2", "alignment": -1, "tier": 1,}\n'
+        ']}\n'
+        '```'
+    )
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["parsed"]["stage_location"] == "TOP"
+    assert body["parsed"]["sections"][0]["alignment"] == 2
+    assert body["parsed"]["sections"][1]["alignment"] == -1
+    # raw text still preserves the fence and quirks
+    assert body["text"] == fake.text
+
+
+def test_response_format_json_schema_uses_lenient_parse_too(client_with_fake) -> None:
+    """json_schema mode also benefits from lenient quirks — a model that
+    emits ': +N' should still trigger schema validation, not a hard 422."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {"alignment": {"type": "integer"}},
+        "required": ["alignment"],
+    }
+    fake.text = '{"alignment": +2,}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["parsed"] == {"alignment": 2}
+
+
+def test_response_format_json_preserves_raw_text(client_with_fake) -> None:
+    """The lenient parser must NEVER mutate the text field — clients may
+    rely on raw output for debugging or their own re-parse."""
+    client, fake = client_with_fake
+    raw_text = '```json\n{"alignment": +2}\n```'
+    fake.text = raw_text
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"response_format": "json"}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.json()["text"] == raw_text
