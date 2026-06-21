@@ -157,12 +157,25 @@ Response:
   "profile": "ocr-default",
   "model": "glm-ocr:latest",
   "provider": "local-ollama",
-  "elapsed_ms": 1247
+  "elapsed_ms": 1247,
+  "tokens_in": 1024,
+  "tokens_out": 512,
+  "cost_usd": 0.0,
+  "seed_used": 42
 }
 ```
 
 `parsed` is `null` unless the request set `response_format: "json"` and
 the response parsed successfully as a JSON object.
+
+The `tokens_in/out`, `cost_usd`, `seed_used` fields are best-effort:
+- `tokens_in/out` — `null` if the provider doesn't surface usage stats
+  (older ollama); otherwise the prompt/completion token counts.
+- `cost_usd` — derived from `cost_per_1k_*_tokens` in `config.json`. Local
+  ollama defaults to `0.0`. Set non-zero values to track spend when you
+  swap in a paid provider.
+- `seed_used` — the seed actually forwarded to the provider, or `null`
+  if neither the request nor `profile_override` set one.
 
 Error codes: `404` (profile / image issue), `422` (bad options / image),
 `502` (provider failure), `503` (concurrency cap reached, with
@@ -275,11 +288,16 @@ curl -X POST localhost:8000/api/detect \
       "type": "ollama",
       "base_url": "http://localhost:11434",
       "api_key": null,
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "cost_per_1k_input_tokens": 0.0,
+      "cost_per_1k_output_tokens": 0.0
     }
   }
 }
 ```
+
+`cost_per_1k_input_tokens` / `cost_per_1k_output_tokens` (USD) drive the
+`cost_usd` field in detect responses. Leave at `0.0` for local ollama.
 
 Override the path with `VISION_OCR_CONFIG=...` (same for
 `VISION_OCR_PROFILES`).

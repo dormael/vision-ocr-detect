@@ -778,3 +778,200 @@ def test_response_format_json_preserves_raw_text(client_with_fake) -> None:
         files={"image": ("img.png", _png(), "image/png")},
     )
     assert r.json()["text"] == raw_text
+
+
+# ----------------------------------------------------------------------
+# response metadata (#7): tokens_in/out, cost_usd, seed_used
+# ----------------------------------------------------------------------
+
+
+def _client_with_usage(client_with_fake, *, tokens_in: int | None, tokens_out: int | None):
+    """Re-bind the dependency override to a FakeProvider that reports usage."""
+    client, default_fake = client_with_fake
+    from vision_ocr_detect import deps as deps_mod
+    from vision_ocr_detect.providers.registry import ProviderRegistry
+
+    fake = default_fake.__class__(
+        default_fake.name,
+        text=default_fake.text,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
+    registry = ProviderRegistry()
+    registry.register(default_fake.name, fake)
+    client.app.dependency_overrides[deps_mod.get_provider_registry] = lambda: registry
+    return client
+
+
+def test_response_includes_seed_used_echoed(client_with_fake) -> None:
+    """seed_used reflects what we forwarded to the provider (or None)."""
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"seed": 42}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["seed_used"] == 42
+
+
+def test_response_includes_seed_used_from_override(client_with_fake) -> None:
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"profile_override": {"seed": 99}}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["seed_used"] == 99
+
+
+def test_response_seed_used_none_when_no_seed(client_with_fake) -> None:
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr"},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["seed_used"] is None
+
+
+def test_response_includes_tokens_in_out_when_provider_reports(client_with_fake) -> None:
+    client = _client_with_usage(client_with_fake, tokens_in=1024, tokens_out=512)
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr"},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    body = r.json()
+    assert body["tokens_in"] == 1024
+    assert body["tokens_out"] == 512
+
+
+def test_response_tokens_null_when_provider_does_not_report(client_with_fake) -> None:
+    client = _client_with_usage(client_with_fake, tokens_in=None, tokens_out=None)
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr"},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    body = r.json()
+    assert body["tokens_in"] is None
+    assert body["tokens_out"] is None
+    assert body["cost_usd"] is None  # can't compute without token counts
+
+
+def test_response_cost_usd_zero_for_local_ollama(client_with_fake) -> None:
+    """Ollama is free; with usage reported, cost_usd must be exactly 0.0."""
+    client = _client_with_usage(client_with_fake, tokens_in=1000, tokens_out=500)
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr"},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    body = r.json()
+    assert body["tokens_in"] == 1000
+    assert body["tokens_out"] == 500
+    assert body["cost_usd"] == 0.0
+
+
+def test_response_metadata_does_not_break_existing_response_shape(client_with_fake) -> None:
+    """All previous fields still present; new fields are additive optionals."""
+    client, fake = client_with_fake
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={"profile": "ocr", "options": json.dumps({"response_format": "json"})},
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    body = r.json()
+    # Existing fields (regression check)
+    assert set(body.keys()) >= {
+        "text", "profile", "model", "provider",
+        "elapsed_ms", "parsed",
+    }
+    # New fields exist (may be None)
+    for k in ("tokens_in", "tokens_out", "cost_usd", "seed_used"):
+        assert k in body
+
+
+def test_cost_usd_computed_for_paid_provider(tmp_path, monkeypatch):
+    """A provider with non-zero per-token pricing produces non-zero cost.
+
+    Uses a custom config.json + dependency override to inject a paid
+    provider config without changing the default ollama setup.
+    """
+    import json
+
+    from vision_ocr_detect.config import ProviderConfig, Settings
+    from vision_ocr_detect import deps as deps_mod
+    from vision_ocr_detect import main as main_mod
+    from vision_ocr_detect.providers.registry import ProviderRegistry
+    from fastapi.testclient import TestClient
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "server": {"host": "127.0.0.1", "port": 8765, "max_concurrent_requests": 2},
+        "providers": {
+            "paid": {
+                "type": "ollama",
+                "base_url": "http://localhost:11434",
+                "timeout_seconds": 30,
+                # $0.001 per 1k input, $0.002 per 1k output
+                "cost_per_1k_input_tokens": 0.001,
+                "cost_per_1k_output_tokens": 0.002,
+            }
+        },
+    }), encoding="utf-8")
+    profiles_path = tmp_path / "profiles.json"
+    profiles_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config_path))
+    monkeypatch.setenv("VISION_OCR_PROFILES", str(profiles_path))
+
+    settings = Settings.model_validate(json.loads(config_path.read_text()))
+
+    from vision_ocr_detect.providers.ollama import OllamaProvider
+    from tests.conftest import FakeProvider
+
+    fake = FakeProvider(
+        "paid",
+        text="ok",
+        tokens_in=2000,
+        tokens_out=1000,
+    )
+    registry = ProviderRegistry()
+    registry.register("paid", fake)
+
+    app = main_mod.create_app(settings=settings)
+    app.dependency_overrides[deps_mod.get_provider_registry] = lambda: registry
+
+    with TestClient(app) as c:
+        # Profile + call
+        c.post("/api/profiles", json={
+            "name": "p", "provider": "paid", "model": "m", "prompt": "p",
+        })
+        r = c.post(
+            "/api/detect",
+            data={"profile": "p"},
+            files={"image": ("i.png", _png(), "image/png")},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # 2000/1000 * 0.001 = 0.002
+        # 1000/1000 * 0.002 = 0.002
+        # Total = 0.004
+        assert body["cost_usd"] == 0.004

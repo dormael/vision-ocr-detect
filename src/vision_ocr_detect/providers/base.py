@@ -8,6 +8,7 @@ about HTTP, base64, or specific model APIs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -36,6 +37,26 @@ class ModelInfo(BaseModel):
     source: CapabilitySource
 
 
+@dataclass(frozen=True)
+class ProviderResult:
+    """Outcome of one provider.detect() call.
+
+    `text` is the raw assistant output (no server-side mutation; clients
+    see this verbatim). The metadata fields are best-effort: providers
+    that don't expose usage stats leave them None.
+
+    `seed_used` is the seed the provider actually used for this call.
+    When the caller passed a seed, that value; when the provider picked
+    its own (e.g. ollama with no seed given), whatever the provider
+    echoes back; None when neither is available.
+    """
+
+    text: str
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    seed_used: int | None = None
+
+
 @runtime_checkable
 class VisionProvider(Protocol):
     """Async vision/OCR interface.
@@ -60,8 +81,8 @@ class VisionProvider(Protocol):
         temperature: float | None = None,
         seed: int | None = None,
         response_format: str | dict | None = None,
-    ) -> str:
-        """Run the model on `image` and return the assistant text.
+    ) -> ProviderResult:
+        """Run the model on `image` and return the result.
 
         `response_format`: provider-defined hint for structured output. The
         default `None` means "free-form text". Implementations accept

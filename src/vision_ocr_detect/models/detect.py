@@ -91,3 +91,9 @@ class DetectResponse(BaseModel):
     provider: str
     elapsed_ms: int
     parsed: dict[str, Any] | None = None
+    # Optional call metadata. None when the provider doesn't surface
+    # usage stats (older ollama) or when no seed was set.
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
+    seed_used: int | None = None

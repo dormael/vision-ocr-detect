@@ -53,15 +53,15 @@ async def test_ollama_detect_red_image() -> None:
     ))
     try:
         png = _png_bytes()
-        text = await provider.detect(
+        result = await provider.detect(
             png, "image/png",
             "granite3.2-vision:2b",
             "Describe this solid-color image in one short sentence.",
         )
-        assert isinstance(text, str)
-        assert text.strip(), "ollama returned empty text"
+        assert isinstance(result.text, str)
+        assert result.text.strip(), "ollama returned empty text"
         # Sanity: response shouldn't be absurdly short or long.
-        assert 5 <= len(text) <= 2000, f"unexpected response length: {len(text)}"
+        assert 5 <= len(result.text) <= 2000, f"unexpected response length: {len(result.text)}"
     finally:
         await provider.aclose()
 

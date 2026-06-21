@@ -28,12 +28,18 @@ class ProviderConfig(BaseModel):
     `type` drives which concrete provider class is instantiated (only `ollama`
     is implemented today; the field exists so external APIs can be added
     without changing the config schema).
+
+    `cost_per_1k_input_tokens` / `cost_per_1k_output_tokens` (USD): optional.
+    Used to compute `cost_usd` in the response. Local providers (ollama)
+    leave them at 0.0.
     """
 
     type: Literal["ollama"]
     base_url: str
     api_key: str | None = None
     timeout_seconds: float = Field(default=300.0, gt=0)
+    cost_per_1k_input_tokens: float = Field(default=0.0, ge=0)
+    cost_per_1k_output_tokens: float = Field(default=0.0, ge=0)
 
 
 class Settings(BaseModel):

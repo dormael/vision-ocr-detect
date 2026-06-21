@@ -22,14 +22,14 @@ import time
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import ValidationError
 
-from vision_ocr_detect.config import Settings
+from vision_ocr_detect.config import ProviderConfig, Settings
 from vision_ocr_detect.deps import get_provider_registry, get_profile_store, get_settings
 from vision_ocr_detect.models.detect import (
     DetectOptions,
     DetectResponse,
     JsonSchemaResponseFormat,
 )
-from vision_ocr_detect.providers.base import VisionProvider
+from vision_ocr_detect.providers.base import ProviderResult, VisionProvider
 from vision_ocr_detect.providers.registry import ProviderRegistry
 from vision_ocr_detect.services.image_processor import (
     ImageProcessingError,
@@ -133,6 +133,24 @@ def _lenient_parse_json(text: str) -> dict | None:
     if not isinstance(candidate, dict):
         return None
     return candidate
+
+
+def _compute_cost(
+    provider_config: ProviderConfig | None, result: ProviderResult
+) -> float | None:
+    """Compute USD cost from per-token pricing.
+
+    Returns None when we don't have enough info (missing token counts or
+    no provider config). Free providers return 0.0 explicitly when usage
+    is reported, so the field stays consistent.
+    """
+    if provider_config is None:
+        return None
+    if result.tokens_in is None and result.tokens_out is None:
+        return None
+    cost_in = (result.tokens_in or 0) / 1000.0 * provider_config.cost_per_1k_input_tokens
+    cost_out = (result.tokens_out or 0) / 1000.0 * provider_config.cost_per_1k_output_tokens
+    return round(cost_in + cost_out, 8)
 
 
 def _validate_against_schema(
@@ -304,7 +322,7 @@ async def detect(
             )
 
         try:
-            text = await provider.detect(
+            result: ProviderResult = await provider.detect(
                 processed.bytes,
                 processed.mime_type,
                 prof.model,
@@ -321,6 +339,8 @@ async def detect(
             ) from e
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        text = result.text
+
         # Parse + validate. Three modes:
         #   - None → parsed=None unconditionally
         #   - "json" → lenient parse (fence + `+`/comma quirks); on
@@ -358,6 +378,12 @@ async def detect(
                 )
             # "json" mode: lenient → parsed=None is acceptable on failure.
 
+        # Cost: per-token pricing from provider config. Local ollama
+        # defaults to 0.0; paid providers can be configured.
+        cost_usd = _compute_cost(
+            settings.providers.get(prof.provider), result
+        )
+
         return DetectResponse(
             text=text,
             profile=prof.name,
@@ -365,6 +391,10 @@ async def detect(
             provider=prof.provider,
             elapsed_ms=elapsed_ms,
             parsed=parsed_json,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            cost_usd=cost_usd,
+            seed_used=result.seed_used,
         )
     finally:
         semaphore.release()

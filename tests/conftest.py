@@ -22,6 +22,7 @@ from vision_ocr_detect.config import ProviderConfig, ServerConfig, Settings
 from vision_ocr_detect.providers.base import (
     ModelInfo,
     ProviderNotFound,
+    ProviderResult,
     VisionProvider,
 )
 from vision_ocr_detect.providers.registry import ProviderRegistry
@@ -36,11 +37,15 @@ class FakeProvider:
         name: str,
         text: str = "fake-ocr-output",
         models: list[ModelInfo] | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
     ) -> None:
         self.name = name
         self.text = text
         self.calls: list[dict[str, object]] = []
         self.closed = False
+        self._tokens_in = tokens_in
+        self._tokens_out = tokens_out
         # Default fixture: one vision + one non-vision model so tests can
         # exercise both code paths without setting up an explicit list.
         self.models: list[ModelInfo] = models if models is not None else [
@@ -63,7 +68,7 @@ class FakeProvider:
         temperature: float | None = None,
         seed: int | None = None,
         response_format: str | dict | None = None,
-    ) -> str:
+    ) -> ProviderResult:
         self.calls.append(
             {
                 "image_bytes": len(image),
@@ -76,7 +81,12 @@ class FakeProvider:
                 "response_format": response_format,
             }
         )
-        return self.text
+        return ProviderResult(
+            text=self.text,
+            tokens_in=self._tokens_in,
+            tokens_out=self._tokens_out,
+            seed_used=seed,
+        )
 
     async def aclose(self) -> None:
         self.closed = True

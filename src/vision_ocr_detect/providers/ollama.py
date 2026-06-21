@@ -19,7 +19,11 @@ from typing import Any
 import httpx
 
 from vision_ocr_detect.config import ProviderConfig
-from vision_ocr_detect.providers.base import CapabilitySource, ModelInfo
+from vision_ocr_detect.providers.base import (
+    CapabilitySource,
+    ModelInfo,
+    ProviderResult,
+)
 
 
 # Name-based fallback for vision detection. Matched case-insensitively
@@ -95,7 +99,7 @@ class OllamaProvider:
         temperature: float | None = None,
         seed: int | None = None,
         response_format: str | dict | None = None,
-    ) -> str:
+    ) -> ProviderResult:
         headers: dict[str, str] = {}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
@@ -136,11 +140,27 @@ class OllamaProvider:
         resp.raise_for_status()
         body = resp.json()
         try:
-            return body["choices"][0]["message"]["content"]
+            text = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(
                 f"unexpected ollama response shape: {body!r}"
             ) from e
+
+        # Usage stats: ollama exposes `usage` on the OpenAI-compat surface
+        # in recent builds. Field names follow the OpenAI convention.
+        usage = body.get("usage") or {}
+        tokens_in = usage.get("prompt_tokens")
+        tokens_out = usage.get("completion_tokens")
+
+        # seed_used: ollama doesn't echo the seed back, so we just record
+        # what we sent. (A future native-endpoint client could compare
+        # against the response's `seed` field.)
+        return ProviderResult(
+            text=text,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            seed_used=seed,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
