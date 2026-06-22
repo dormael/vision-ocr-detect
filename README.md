@@ -175,6 +175,13 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
   schema mismatch return **422** with the raw text in the error
   detail — clients should treat this as a hard failure and retry with
   a different model or prompt, not silently accept `parsed: null`.
+  **Null-tolerance retry**: when schema validation fails, the server
+  retries once with explicit `"field": null` values stripped from the
+  parsed output before revalidating. This absorbs a common VLM quirk
+  where the model emits `"field": null` for an optional field instead
+  of omitting it; the schema (correctly) treats null as a type violation
+  but is usually happy with the field missing. The raw `text` field is
+  always preserved — the cleaning only affects `parsed`.
 - `profile_override`: per-call override of the resolved profile. Unset
   fields fall back to the profile's value. `provider` is re-validated
   against the configured providers (400 on unknown). `temperature` is

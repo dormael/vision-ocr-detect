@@ -795,6 +795,150 @@ def test_response_format_json_schema_uses_lenient_parse_too(client_with_fake) ->
     assert r.json()["parsed"] == {"alignment": 2}
 
 
+def test_response_format_json_schema_drops_explicit_null_for_optional_field(
+    client_with_fake,
+) -> None:
+    """A model that emits `\"field\": null` for an optional field (instead
+    of omitting it) should not trigger 422. The retry step drops the null
+    and revalidates against the schema — null and missing are treated as
+    equivalent for non-required fields."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {
+            "stage_location": {"type": "string", "enum": ["TOP", "BOTTOM"]},
+            "special": {"type": "string", "enum": ["wheelchair", "obstructed"]},
+        },
+        "required": ["stage_location"],
+    }
+    # `special: null` violates the enum, but `special` is not required —
+    # dropping it should make validation pass.
+    fake.text = '{"stage_location": "TOP", "special": null}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "layout", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # null is dropped from parsed
+    assert body["parsed"] == {"stage_location": "TOP"}
+    # raw text still preserves the original model output for debugging
+    assert body["text"] == '{"stage_location": "TOP", "special": null}'
+
+
+def test_response_format_json_schema_required_null_still_returns_422(
+    client_with_fake,
+) -> None:
+    """If a required field is null, dropping it doesn't help → 422."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {"stage_location": {"type": "string"}},
+        "required": ["stage_location"],
+    }
+    fake.text = '{"stage_location": null}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "layout", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+    assert "raw" in r.json()["detail"]
+
+
+def test_response_format_json_schema_null_in_array_item_is_dropped(
+    client_with_fake,
+) -> None:
+    """The null-drop retry walks into nested arrays — null inside an
+    `items` array gets dropped alongside null values at the top level."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            },
+        },
+        "required": ["sections"],
+    }
+    # outer-level null: fails schema; cleaned dict has no top-level nulls
+    # because the outer-level field already passes. inner null in items[1]:
+    # after dropping, the array item has no `name` → required violation
+    # stays in items[1]. To verify the array walk we instead use a schema
+    # where the offending null is in an optional inner field.
+    schema_optional = {
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "tag": {"type": "string", "enum": ["A"]},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+        "required": ["sections"],
+    }
+    fake.text = (
+        '{"sections": ['
+        '{"name": "S1", "tag": "A"},'
+        '{"name": "S2", "tag": null}'
+        ']}'
+    )
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "layout", "schema": schema_optional},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # S1's tag is non-null ("A"), preserved as-is.
+    # S2's tag is null and dropped from the parsed output.
+    assert body["parsed"] == {
+        "sections": [
+            {"name": "S1", "tag": "A"},
+            {"name": "S2"},
+        ]
+    }
+
+
 def test_response_format_json_preserves_raw_text(client_with_fake) -> None:
     """The lenient parser must NEVER mutate the text field — clients may
     rely on raw output for debugging or their own re-parse."""

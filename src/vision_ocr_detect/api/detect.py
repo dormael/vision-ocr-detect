@@ -18,6 +18,7 @@ import asyncio
 import json
 import re
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import ValidationError
@@ -135,6 +136,25 @@ def _lenient_parse_json(text: str) -> dict | None:
     return candidate
 
 
+def _drop_null_fields(obj: Any) -> Any:
+    """Recursively strip `"key": null` entries from dicts.
+
+    Walks nested dicts and lists; other values pass through unchanged.
+    Used as a retry step when JSON Schema validation fails: many VLMs
+    emit `"field": null` for optional fields where they would previously
+    have omitted the field. JSON Schema treats these as different, so
+    the lenient retry drops explicit nulls and tries again.
+
+    A schema that intentionally accepts null is unaffected — the first
+    validation pass succeeds and we don't reach the retry.
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_null_fields(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_drop_null_fields(item) for item in obj]
+    return obj
+
+
 def _compute_cost(
     provider_config: ProviderConfig | None, result: ProviderResult
 ) -> float | None:
@@ -191,7 +211,19 @@ def _validate_against_schema(
         validator.validate(candidate)
         return candidate
     except ValidationError:
-        return None
+        # Retry once with explicit null fields stripped. Common VLM
+        # quirk: the model emits `"field": null` for optional fields
+        # where it used to omit the field, and the schema (correctly)
+        # rejects null. Dropping nulls recovers the missing-field
+        # interpretation without weakening other validation.
+        cleaned = _drop_null_fields(candidate)
+        if cleaned == candidate:
+            return None
+        try:
+            validator.validate(cleaned)
+            return cleaned
+        except ValidationError:
+            return None
 
 
 @router.post("/detect", response_model=DetectResponse)
