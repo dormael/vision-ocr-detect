@@ -110,6 +110,15 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
   - `fill` (default) — stretch to exact dimensions, ignoring aspect ratio
   - `contain` — preserve aspect ratio, letterbox with `background`
   - `cover` — preserve aspect ratio, center-crop to exact dimensions
+
+  **Trade-off observed in the interpark-ticket use case (4-venue recall
+  measurement)**: `fit=contain` adds white padding around the source
+  image to preserve the aspect ratio. Some VLMs (qwen2.5vl:7b on KBS
+  Hall layouts) misinterpret the letterbox as part of the seating area
+  and misclassify `stage_location` as `CENTER` instead of `TOP`. If
+  `stage_location` accuracy matters, prefer `fit=fill` (stretch, no
+  padding) or `fit=cover` (crop, no padding). If recall on small labels
+  is the priority, `fit=contain` is still best (it preserves detail).
 - `image.resize.background`: hex color (`#rgb` / `#rrggbb` / `#rrggbbaa`),
   only used when `fit: "contain"`. Defaults to `#ffffff`.
 - `response_format`: when set to `"json"`, the provider is asked to emit

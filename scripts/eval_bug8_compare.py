@@ -29,6 +29,12 @@ OLLAMA_URL = "http://localhost:11434"
 API_URL = "http://localhost:8000"
 
 # Single shared config: the requester's "best so far" per the bug report.
+# NOTE: fit=contain adds white letterbox padding. The requester's
+# 4-venue recall measurement showed this caused qwen2.5vl:7b to
+# misclassify stage_location on KBS Hall layouts (2/3 venues → CENTER
+# instead of TOP). The script keeps fit=contain for backward compat
+# with the original cross-model comparison; production code that cares
+# about stage_location should prefer fit=fill (stretch) instead.
 OPTIONS = {
     "temperature": 0.0,
     "max_tokens": 4096,

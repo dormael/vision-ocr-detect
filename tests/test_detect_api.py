@@ -73,6 +73,39 @@ def test_detect_with_options_passes_through(client_with_fake) -> None:
     assert call["temperature"] == 0.0
 
 
+def test_max_tokens_upper_bound(client_with_fake) -> None:
+    """max_tokens must be 1..16384. The cap was raised from 8192 → 16384
+    after the requester hit it while measuring recall across 4 venues."""
+    client, _ = client_with_fake
+    _create_profile(client)
+
+    # Below the cap: accepted (we don't care about the model's output for
+    # this test; the FakeProvider is configured to return text unconditionally).
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"max_tokens": 16384}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+
+    # Above the cap: 422.
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({"max_tokens": 16385}),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+    body = r.json()
+    assert body["detail"][0]["loc"] == ["max_tokens"]
+    assert body["detail"][0]["ctx"]["le"] == 16384
+
+
 def test_detect_profile_not_found(client_with_fake) -> None:
     client, _ = client_with_fake
     r = client.post(
