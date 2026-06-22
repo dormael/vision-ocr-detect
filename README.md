@@ -137,9 +137,14 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
     white letterbox is occasionally read as part of the seating area.
   - **Caveat**: at small resolutions (≤600x540) the `STAGE` text label
     itself becomes less readable to the VLM. Venue 26000382 regressed
-    from `TOP` (1200x1080) to `CENTER` (600x540). Override
-    `image.resize` per-call when a specific venue needs both label
-    detail and accurate stage labelling.
+    from `TOP` (1200x1080) to `CENTER` (600x540). **Simply overriding
+    to a larger image is not a safe workaround**: a direct A/B on
+    26000382 with `fit=fill` controlled, size bumped from 600x540 to
+    1200x1080, recovered `stage_location` but collapsed recall from
+    0.815 to 0.037 (`tokens_out` 1398 → 116 — the 7B model
+    self-truncated). For per-venue stage fix, prefer a rule-based
+    correction over `image.resize`; the `image.resize` knob alone
+    cannot optimise both axes in a single model pass.
 - `image.resize.background`: hex color (`#rgb` / `#rrggbb` / `#rrggbbaa`),
   only used when `fit: "contain"`. Defaults to `#ffffff`.
 - `response_format`: when set to `"json"`, the provider is asked to emit
