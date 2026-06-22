@@ -111,14 +111,35 @@ Pipeline order is **crop → preprocess → scale → resize → encode**.
   - `contain` — preserve aspect ratio, letterbox with `background`
   - `cover` — preserve aspect ratio, center-crop to exact dimensions
 
-  **Trade-off observed in the interpark-ticket use case (4-venue recall
-  measurement)**: `fit=contain` adds white padding around the source
-  image to preserve the aspect ratio. Some VLMs (qwen2.5vl:7b on KBS
-  Hall layouts) misinterpret the letterbox as part of the seating area
-  and misclassify `stage_location` as `CENTER` instead of `TOP`. If
-  `stage_location` accuracy matters, prefer `fit=fill` (stretch, no
-  padding) or `fit=cover` (crop, no padding). If recall on small labels
-  is the priority, `fit=contain` is still best (it preserves detail).
+  **Trade-off observed in the interpark-ticket use case (3-venue recall
+  measurement, qwen2.5vl:7b)**: `fit=contain` adds white padding around
+  the source image to preserve the aspect ratio. Some VLMs (qwen2.5vl:7b
+  on KBS Hall layouts) misinterpret the letterbox as part of the seating
+  area and misclassify `stage_location` as `CENTER` instead of `TOP`.
+
+  Measured outcomes on 3 venues (26000382 / 26000634 / 26008115):
+
+  | baseline                       | mean recall | mean precision | mean halluc | stage_location |
+  |--------------------------------|-------------|----------------|-------------|----------------|
+  | jpeg 1200x1080 `fit=contain`   | 0.512       | 0.577          | 0.090       | 1/3 ✓          |
+  | **png 600x540 `fit=fill`**     | **0.897**   | **0.912**      | 0.088       | 2/3 ✓          |
+  | png 600x540 `fit=cover`        | 0.892       | 0.943          | +2 sections | 2/3 ✓          |
+
+  Recommendations for layout-recall workloads (qwen2.5vl:7b-class models):
+  - **Default**: `format=png, fit=fill, size 600x540`. No padding, no
+    cropping, smallest input that still preserves label detail. Smaller
+    inputs leave more output-token headroom — 37-section venues fit
+    comfortably without truncation.
+  - **Aspect-preserving alternative**: `fit=cover` (center-crop). Recall
+    is comparable but the cropped edge can produce hallucinated sections
+    (observed: 306 / 307 on venue 26008115).
+  - **Avoid `fit=contain`** when `stage_location` accuracy matters —
+    white letterbox is occasionally read as part of the seating area.
+  - **Caveat**: at small resolutions (≤600x540) the `STAGE` text label
+    itself becomes less readable to the VLM. Venue 26000382 regressed
+    from `TOP` (1200x1080) to `CENTER` (600x540). Override
+    `image.resize` per-call when a specific venue needs both label
+    detail and accurate stage labelling.
 - `image.resize.background`: hex color (`#rgb` / `#rrggbb` / `#rrggbbaa`),
   only used when `fit: "contain"`. Defaults to `#ffffff`.
 - `response_format`: when set to `"json"`, the provider is asked to emit

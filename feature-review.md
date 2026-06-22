@@ -2,8 +2,8 @@
 
 **대상**: `feature-request.md` (interpark-ticket 프로젝트 요청)
 **검토일**: 2026-06-21
-**갱신일**: 2026-06-21 (P0-Sprint1, P1-Sprint2 완료 반영)
-**현재 상태**: main @ `8bf79fc`, **69/69 tests pass**
+**갱신일**: 2026-06-22 (Bug 8 종료, followup-5/extra-2 회신)
+**현재 상태**: main @ `7143560`, **117/117 tests pass**
 
 요청 12건을 effort/영향/리스크 기준으로 분류. 우선순위는 제안이며 사용자 확인 필요.
 
@@ -88,7 +88,7 @@
 | 1-5 (preprocess 500) | ✅ `489fdf7` | GIF 팔레트 모드 → RGB 변환 |
 | 6 (top-level seed) | ✅ `09c663d` | `DetectOptions.seed` 필드 추가 |
 | 7 (markdown fence) | ✅ `8bf79fc` | `_strip_markdown_fence` 헬퍼 |
-| 8 (품질 회귀) | 🔵 진단 완료 | **VLM 한계** (qwen2.5vl:7b + prompt). API는 정상, 마이그레이션 보류 해제 가능. 추가 모델 비교 평가 후 권장안 정리 (`fixtures/`, `scripts/eval_bug8.py`) |
+| 8 (품질 회귀) | ✅ 종료 | 자체 측 v2 측정: jpeg 1200x1080 fit=contain → png 600x540 fit=fill로 recall **0.512 → 0.897 (+75%)**. 서버는 정상, 클라이언트 측 옵션 최적화로 해결. |
 
 ---
 
