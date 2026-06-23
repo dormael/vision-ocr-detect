@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from vision_ocr_detect.api.detect import router as detect_router
 from vision_ocr_detect.api.models import router as models_router
@@ -14,6 +16,52 @@ from vision_ocr_detect.config import Settings, load_settings
 from vision_ocr_detect.deps import get_profiles_path
 from vision_ocr_detect.providers.registry import ProviderRegistry
 from vision_ocr_detect.services.profile_store import ProfileStore
+
+# Logger for per-request telemetry emitted by the middleware below.
+# Goes through the standard logging pipeline so it can be filtered /
+# redirected by the same config that handles uvicorn's loggers.
+request_logger = logging.getLogger("vision_ocr_detect.request")
+
+# Uvicorn log config: extends the default access format with `duration`
+# (request time in seconds, %.3f) and `size` (response bytes). Defaults
+# are kept for everything else so the format stays close to vanilla
+# uvicorn — easy to grep, easy to read.
+LOG_CONFIG: dict[str, object] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(levelprefix)s %(message)s",
+        },
+        "access": {
+            "format": (
+                '%(client_addr)s - "%(request_line)s" '
+                "%(status_code)s duration=%(d).3fs size=%(b)sB"
+            ),
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+        },
+        "access": {
+            "formatter": "access",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": "INFO"},
+        "uvicorn.error": {"level": "INFO"},
+        "uvicorn.access": {
+            "handlers": ["access"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
 
 
 @asynccontextmanager
@@ -61,6 +109,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def _log_request(request: Request, call_next):
+        """Log total request duration and attach `X-Process-Time` header.
+
+        Adds a structured application log line per request so a grep
+        over `/tmp/ocr-server-logs/server.log` can answer "how long did
+        request X take?" without parsing the access-log format. Also
+        exposes the timing to clients via the response header.
+        """
+        started = time.perf_counter()
+        response = await call_next(request)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        response.headers["X-Process-Time"] = f"{elapsed_ms}ms"
+        request_logger.info(
+            "method=%s path=%s status=%d elapsed_ms=%d",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
+        return response
+
     @app.get("/health")
     async def health() -> dict[str, object]:
         s = settings or app.state.settings
@@ -107,6 +177,7 @@ def main() -> None:
         host=settings.server.host,
         port=settings.server.port,
         reload=False,
+        log_config=LOG_CONFIG,
     )
 
 
