@@ -546,6 +546,108 @@ def test_response_format_json_schema_validation_failure_returns_422(client_with_
     assert "unrelated" in body["detail"]
 
 
+def test_response_format_json_schema_422_detail_includes_truncation_signature(
+    client_with_fake,
+) -> None:
+    """Schema-mismatch 422 surfaces text_length, last_nonempty_line, and
+    ends_with_unclosed_brace so the client can tell truncation from a
+    genuine schema violation. Also includes a remediation suggestion."""
+    client, fake = client_with_fake
+    schema = {
+        "type": "object",
+        "properties": {"stage_location": {"type": "string"}},
+        "required": ["stage_location"],
+    }
+    # Last non-whitespace char is `}` (genuine schema violation, not
+    # truncation). Last non-empty line shows the offending payload.
+    fake.text = '{"unrelated": "value"}'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "text_length=" in detail
+    assert "ends_with_unclosed_brace=False" in detail
+    assert 'last_nonempty_line=' in detail
+    assert "suggestion=" in detail
+    assert "response_format=json" in detail
+    assert "max_tokens=16384" in detail
+    assert "raw=" in detail  # backward compat: existing substring check
+
+
+def test_response_format_json_schema_parse_fail_422_detects_truncation(
+    client_with_fake,
+) -> None:
+    """When the model output is itself unparseable (not just schema-
+    mismatched) the 422 detail flags `ends_with_unclosed_brace=True`,
+    the common VLM truncation fingerprint."""
+    client, fake = client_with_fake
+    schema = {"type": "object"}  # any valid schema
+    # Truncated mid-value: opening brace but no closing — last char is `{`.
+    fake.text = '```json\n{"sections": [\n  {"name": "S1", "val": 1},\n  {"name":'
+    _create_profile(client)
+    r = client.post(
+        "/api/detect",
+        data={
+            "profile": "ocr",
+            "options": json.dumps({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "x", "schema": schema},
+                }
+            }),
+        },
+        files={"image": ("img.png", _png(), "image/png")},
+    )
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "ends_with_unclosed_brace=True" in detail
+    assert "text_length=" in detail
+    assert "last_nonempty_line=" in detail
+    assert "suggestion=" in detail
+
+
+def test_truncation_signature_helper_directly() -> None:
+    """Direct unit test of _truncation_signature so the helper's
+    behavior is locked in independent of the endpoint wiring."""
+    from vision_ocr_detect.api.detect import _truncation_signature
+
+    # Truncated mid-array — trailing comma is the fingerprint.
+    sig = _truncation_signature('{"x": 1, "y": [1, 2,')
+    assert sig["text_length"] == len('{"x": 1, "y": [1, 2,')
+    assert sig["last_nonspace_char"] == ","
+    assert sig["ends_with_unclosed_brace"] is True
+    assert sig["last_nonempty_line"] == '{"x": 1, "y": [1, 2,'
+
+    # Mid-key — trailing colon (no value yet) is also truncation.
+    sig = _truncation_signature('{"name":')
+    assert sig["last_nonspace_char"] == ":"
+    assert sig["ends_with_unclosed_brace"] is True
+
+    # Clean JSON — closing brace, not truncation.
+    sig = _truncation_signature('{"x": 1}\n')
+    assert sig["last_nonspace_char"] == "}"
+    assert sig["ends_with_unclosed_brace"] is False
+
+    # Empty / whitespace-only — no signal.
+    sig = _truncation_signature("   \n\n")
+    assert sig["text_length"] == 5
+    assert sig["last_nonspace_char"] == ""
+    assert sig["ends_with_unclosed_brace"] is False
+    assert sig["last_nonempty_line"] == ""
+
+
 def test_response_format_json_schema_strips_markdown_fence(client_with_fake) -> None:
     """```json ... ``` wrappers are stripped before schema validation."""
     client, fake = client_with_fake

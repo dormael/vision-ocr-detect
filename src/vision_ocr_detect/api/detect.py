@@ -155,6 +155,49 @@ def _drop_null_fields(obj: Any) -> Any:
     return obj
 
 
+# Shown in 422 detail when JSON parsing fails. Surfaces two known
+# remediations the client can try before retrying with a different
+# model or prompt: switch to lenient mode (parsed=None, text preserved)
+# or raise max_tokens.
+_TRUNCATION_SUGGESTION = (
+    "Output may be truncated or contain syntax errors. "
+    "Try response_format=json (lenient) or max_tokens=16384."
+)
+
+
+def _truncation_signature(text: str) -> dict[str, object]:
+    """Best-effort fingerprint of why the model output failed to parse.
+
+    Helps clients distinguish a *truncated* response (model hit ollama's
+    num_predict / context limit and stopped mid-token — last character
+    is likely `{`, `[`, or `,`) from a genuine JSON syntax error (model
+    emitted malformed JSON but with a clean terminator). Truncation is
+    actionable: raise `max_tokens` or switch to lenient mode. Syntax
+    errors usually mean a prompt or model change is needed.
+    """
+    stripped = text.rstrip()
+    last_nonspace = stripped[-1] if stripped else ""
+    last_line = ""
+    for line in reversed(stripped.splitlines()):
+        if line.strip():
+            last_line = line.strip()
+            break
+    return {
+        "text_length": len(text),
+        "last_nonspace_char": last_nonspace,
+        # Heuristic: a trailing `{`, `[`, `,`, `:`, or unterminated
+        # string `"` strongly suggests the model stopped mid-value
+        # rather than emitting valid-but-bad JSON. The field name keeps
+        # the original "unclosed brace" framing for backward compat —
+        # the docstring is the source of truth.
+        "ends_with_unclosed_brace": last_nonspace in (
+            "{", "[", ",", ":", '"',
+        ),
+        # Truncate to keep the 422 detail bounded.
+        "last_nonempty_line": last_line[:200],
+    }
+
+
 def _compute_cost(
     provider_config: ProviderConfig | None, result: ProviderResult
 ) -> float | None:
@@ -388,24 +431,41 @@ async def detect(
                         candidate, rf.json_schema.schema_
                     )
                     if parsed_json is None:
-                        # Schema mismatch → 422.
+                        # Schema mismatch → 422. Include a truncation
+                        # signature so the client can tell whether the
+                        # model ran out of tokens vs emitted a payload
+                        # the schema doesn't allow.
+                        sig = _truncation_signature(text)
                         raise HTTPException(
                             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=(
                                 f"model output did not match response_format."
-                                f"json_schema; raw={text!r}"
+                                f"json_schema; text_length={sig['text_length']} "
+                                f"ends_with_unclosed_brace="
+                                f"{sig['ends_with_unclosed_brace']} "
+                                f"last_nonempty_line={sig['last_nonempty_line']!r} "
+                                f"suggestion={_TRUNCATION_SUGGESTION!r}; "
+                                f"raw={text!r}"
                             ),
                         )
                 else:
                     parsed_json = candidate
             elif isinstance(rf, JsonSchemaResponseFormat):
                 # JSON parse failed (or result wasn't a dict) under
-                # json_schema mode → 422 with raw text for debugging.
+                # json_schema mode → 422 with raw text + truncation
+                # signature for diagnosis (truncation is the common
+                # case for 26000634-style dense layouts).
+                sig = _truncation_signature(text)
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         f"response_format=json_schema requires valid JSON "
-                        f"object output; raw={text!r}"
+                        f"object output; text_length={sig['text_length']} "
+                        f"ends_with_unclosed_brace="
+                        f"{sig['ends_with_unclosed_brace']} "
+                        f"last_nonempty_line={sig['last_nonempty_line']!r} "
+                        f"suggestion={_TRUNCATION_SUGGESTION!r}; "
+                        f"raw={text!r}"
                     ),
                 )
             # "json" mode: lenient → parsed=None is acceptable on failure.
