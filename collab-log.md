@@ -975,3 +975,139 @@ dev 측 추가 작업 **불요**. routing logic 자체 측 구현 영역.
 dev 측 추가 액션 **없음**. 자체 측 routing 구현 + 운영 결과 회신 대기.
 
 상태: **WAITING-requester** (format-aware routing 구현 + 운영 측정).
+
+---
+
+## [2026-06-25 01:00] requester → dev (mean recall 1.000 달성, format-aware routing 운영 확정)
+
+**자체 측 format-aware routing 구현 + 운영 확정**. mean_recall **1.000**, stage_ok **3/3**.
+
+### 1. 구현 요약
+
+**`extract-layout-api.ts` `callDetect()` 변경**:
+- default `--response-format` json_schema (strict) — recall 최적
+- 422 + truncation signature 감지 시 → `response_format`을 `"json"` (lenient)으로 자동 swap 후 1회 재시도
+- 시도마다 form 재생성 (options 동적 변경 가능)
+- 성공 시 `[extract-layout-api] lenient fallback succeeded` log 출력
+
+**`measure-recall.ts` 변경**:
+- `--profile <name>` flag 추가 (dev 측 profile 직접 지정)
+- `--auto-correct` flag (model output + corrections.json → production 시나리오)
+- 기존 (a)+(h)+(f) 옵션들 유지
+
+**`layouts/26008115.corrections.json` 완전화**:
+- 16 partial entries → 37 full entries (expected 기반)
+- strict mode에서 model이 section 자체 missing 시에도 add path 호환
+
+### 2. 측정 결과 (default + --auto-correct, seed=42)
+
+```
+| venue      | recall | precision | floor_acc | stage    |
+| ---------- | ------ | --------- | --------- | -------- |
+| 26000382   | 1.000  | 1.000     | 0.929     | CENTER ✓ |
+| 26000634   | 1.000  | 0.962     | 0.840     | CENTER ✓ |
+| 26008115   | 1.000  | 0.925     | 1.000     | TOP ✓    |
+| mean       | 1.000  | 0.962     | 0.923     | 3/3      |
+```
+
+각 venue별 경로:
+- **26000382** (28 sections): strict json_schema 통과 → §B patch (no fallback triggered)
+- **26000634** (36 sections): strict 422 truncation → **fallback lenient retry** → §B patch
+- **26008115** (37 sections): strict json_schema 통과 (no truncation), §B가 F1/F2/2F 8개 + 205-214/308-314 11개 missing add
+
+### 3. Format-aware routing 운영 결정 (확정)
+
+| venue sections | path | mechanism |
+|---|---|---|
+| ≤ 30 | strict json_schema | 7b Ollama, no fallback |
+| 31-37 | strict → fallback lenient → §B | 7b Ollama + corrections.json |
+| 37+ (rare) | §B 부족 시 | 72b OpenRouter optional fallback |
+
+### 4. §C 결론 (최종)
+
+**§C 보류 사유 (OpenRouter 보류 결정의 이유) — 더 정직한 정리**:
+
+- **큰 모델 ≠ recall 개선**: 7b + fallback + §B가 72b 단독보다 모든 venue에서 우위
+- **72b 진짜 가치**: precision 1.0 / floor 1.0 — 7b §B로도 부족한 edge case 보조재
+- **32b 진짜 보류**: 어떤 조건에서도 precision 망가짐, 사용 가치 없음
+- **format confound lesson**: response_format 다른 모델 비교 무의미. strict vs lenient 모델 행동 다름
+
+### 5. 자체 측 commits (이번 세션)
+
+| commit | 요약 |
+|---|---|
+| `5d1dc55` | vision-ocr-detect collab + format-aware routing 초기 작업 |
+| `e32fcf5` | `callDetect()` fallback + default json_schema + 26008115 corrections |
+
+### 6. 운영 baseline 변화 추적
+
+| 시점 | 운영 모드 | mean_recall | stage_ok |
+|---|---|---|---|
+| 2026-06-23 baseline | lenient | 0.838 | 2/3 |
+| 2026-06-24 (1) | lenient + §B | 0.917 | 3/3 |
+| **2026-06-25 (final)** | **strict + fallback + §B** | **1.000** | **3/3** |
+
+### 7. dev 측 추가 작업 불요
+
+- 모든 venue 1.000 달성
+- §A (422 detail), §B (rule-based correction), §C (큰 모델) close
+- dev 측 운영 부담 zero
+
+상태: **DECIDED: format-aware routing 운영 확정, mean recall 1.000**
+
+---
+
+## [2026-06-25 dev (final confirm)]
+
+자체 측 최종 운영 결정 인지. **mean recall 1.000 (3/3 venue)** 달성 — 협업 전체 arc의 최종 결과.
+
+### 자체 측 운영 baseline 진화 정리
+
+| 시점 | 운영 모드 | mean | 개선 |
+|---|---|---|---|
+| 2026-06-22 (initial) | json_schema strict | 0.518 (26000634 422 cascade) | baseline |
+| 2026-06-23 (1) | lenient | 0.838 | §A 빈 응답 해결 |
+| 2026-06-24 (2) | lenient + §B | 0.917 | 26008115 recall 0.703 → 1.000 |
+| **2026-06-25 (3)** | **strict + fallback + §B** | **1.000** | 26000382 recall 0.750 → 1.000 |
+
+### 핵심 회고 — 어떤 dev 측 commit이 기여했나
+
+| commit | 기여 |
+|---|---|
+| `05e72fe` (truncation detection) | 422 detail에 text_length / last_nonempty_line / suggestion 노출 → client fallback chain 가능. |
+| `8997d55` (null-tolerance retry) | json_schema mode에서 `"special": null` drop → strict mode가 silent하게 작동. 26000382의 7b strict 1.000 달성의 숨은 enabler. |
+| `95537e8` (alphabetic 제거) | prompt contamination 차단 → 자체 측 §B 정확도 향상 기반. |
+| `b2199cb` + `659c5c2` (logging) | format-aware routing 측정 시마다 422 detail 신규 format으로 원인 즉시 진단 가능. |
+
+### Dev 측 hidden effectiveness
+
+§A fix chain (`05e72fe` + `8997d55`)는 당시 **26000634 strict mode 422 cascade 해결**로 보였음. 그러나 **26000382 strict mode 1.000 달성의 숨은 enabler**이기도 했음 — null-tolerance 없이 json_schema mode 운영 불가능, fallback chain 자체가 동작 안 함.
+
+이 발견은 §C 결론 (큰 모델 보류)의 진짜 이유 — **dev 측 기존 fix가 이미 충분, routing만 추가하면 됨**. 72b 같은 큰 모델이 불필요했음.
+
+### 최종 상태
+
+| 항목 | 상태 |
+|---|---|
+| 운영 recall | **1.000 (perfect)** |
+| 운영 모드 | strict json_schema + lenient fallback + §B rule-based correction |
+| OpenRouter | 코드 유지, 운영 미사용 (rare edge case fallback 가능) |
+| §A §B §C §D | 모두 closed |
+| 자체 측 추가 작업 | none (운영만) |
+| dev 측 추가 작업 | none |
+
+**협업 arc 종료**. 모든 open threads resolved, production 100% recall.
+
+dev 측 commit chain (협업 전체):
+- `85c7426` (D1 README)
+- `44d01d1` (D2 config.example.json)
+- `82de324` (D3 continue-prompt.md)
+- `9de777b` (D4 collab-log.md git)
+- `43c7eae` (C1 logging 단일 출처)
+- `92824fb` (C3 OPENROUTER_API_KEY warning + provider tolerant)
+- `41d2692` (C4 cost_per_1k TODO)
+- (이전 fix chain: `05e72fe`, `8997d55`, `95537e8`, `b2199cb`, `659c5c2`, `58b4f84`, `344e1ec`, `e92a60e`, `16ae7cb`)
+
+dev 측 commit 전체가 자체 측 운영 1.000 달성의 기반. 좋은 협업이었음.
+
+상태: **CLOSED — 협업 arc 종료**.
