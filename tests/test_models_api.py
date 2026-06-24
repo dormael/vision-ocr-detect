@@ -108,7 +108,7 @@ def test_models_unknown_provider_returns_404(models_registry):
     assert "ghost" in r.json()["detail"]
 
 
-def test_health_includes_vision_models():
+def test_health_includes_vision_models(monkeypatch):
     """The /health endpoint surfaces vision model names per provider.
 
     /health reads from app.state.provider_registry (the real registry built
@@ -120,6 +120,12 @@ def test_health_includes_vision_models():
     from vision_ocr_detect.config import load_settings
     from vision_ocr_detect.main import create_app
     from vision_ocr_detect.providers.registry import ProviderRegistry
+
+    # The real config.json may declare the openrouter provider, which
+    # would fail to construct without OPENROUTER_API_KEY. Set a
+    # dummy value so the lifespan can build the registry; this test
+    # doesn't make any openrouter calls.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-dummy")
 
     # Skip if ollama isn't actually running.
     try:

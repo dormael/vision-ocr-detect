@@ -8,31 +8,36 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from pathlib import Path
 
 import pytest
 from fastapi import Request
 
 
-def _make_client():
-    """Build a TestClient (context manager) using the real FastAPI app.
-
-    The middleware is registered on the module-level `app`, so we
-    import it directly rather than going through `create_app()`. The
-    TestClient must run inside its `__enter__` to fire lifespan, which
-    initialises the profile_store / provider_registry.
+def _make_client(monkeypatch_env: tuple[Path, Path]):
+    """Build a TestClient using a clean config that only has the local
+    ollama provider (no openrouter). `monkeypatch_env` sets VISION_OCR_CONFIG
+    to a temp file before the app loads, so the lifespan-built registry
+    only contains the ollama provider — these middleware tests don't
+    exercise providers directly, so the openrouter block would just
+    add noise (and fails when OPENROUTER_API_KEY isn't set).
     """
     from fastapi.testclient import TestClient
 
-    from vision_ocr_detect.main import app
+    from vision_ocr_detect import main as main_mod
 
+    config_path, _profiles_path = monkeypatch_env
+    settings = main_mod.load_settings(config_path)
+    app = main_mod.create_app(settings=settings)
     return TestClient(app)
 
 
-def test_middleware_sets_x_process_time_header() -> None:
+def test_middleware_sets_x_process_time_header(monkeypatch_env: tuple[Path, Path]) -> None:
     """Every response should carry an `X-Process-Time: <n>ms` header."""
-    with _make_client() as client:
+    with _make_client(monkeypatch_env) as client:
         r = client.get("/health")
         assert r.status_code == 200
         header = r.headers.get("x-process-time")
@@ -43,11 +48,12 @@ def test_middleware_sets_x_process_time_header() -> None:
 
 def test_middleware_emits_structured_log_line(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch_env: tuple[Path, Path],
 ) -> None:
     """A log line keyed by `vision_ocr_detect.request` should fire on
     every request, with method, path, status, and elapsed_ms fields."""
     with caplog.at_level(logging.INFO, logger="vision_ocr_detect.request"):
-        with _make_client() as client:
+        with _make_client(monkeypatch_env) as client:
             r = client.get("/health")
             assert r.status_code == 200
 
@@ -64,12 +70,13 @@ def test_middleware_emits_structured_log_line(
 
 def test_middleware_log_includes_status_for_error_response(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch_env: tuple[Path, Path],
 ) -> None:
     """The structured log captures the status code even on errors, so
     a grep on `status=422` finds schema-validation failures without
     needing to parse the uvicorn access-log format."""
     with caplog.at_level(logging.INFO, logger="vision_ocr_detect.request"):
-        with _make_client() as client:
+        with _make_client(monkeypatch_env) as client:
             r = client.get("/api/profiles/does-not-exist")
             assert r.status_code == 404
 
@@ -81,12 +88,13 @@ def test_middleware_log_includes_status_for_error_response(
 
 def test_middleware_log_omits_params_when_endpoint_does_not_set_them(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch_env: tuple[Path, Path],
 ) -> None:
     """Endpoints that don't populate `request.state.log_params` should
     produce a log line without the `params=` suffix (so non-detect
     routes don't carry empty noise)."""
     with caplog.at_level(logging.INFO, logger="vision_ocr_detect.request"):
-        with _make_client() as client:
+        with _make_client(monkeypatch_env) as client:
             r = client.get("/api/profiles/does-not-exist")
             assert r.status_code == 404
 
@@ -97,15 +105,18 @@ def test_middleware_log_omits_params_when_endpoint_does_not_set_them(
 
 def test_middleware_log_includes_params_json_when_endpoint_sets_them(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch_env: tuple[Path, Path],
 ) -> None:
     """An endpoint that stashes a dict on `request.state.log_params`
     should see it appear as `params=<json>` on the same log line —
     handy for grepping `/api/detect` calls by profile / options."""
     from fastapi.testclient import TestClient
 
-    from vision_ocr_detect.main import create_app
+    from vision_ocr_detect import main as main_mod
 
-    app = create_app()
+    config_path, _ = monkeypatch_env
+    settings = main_mod.load_settings(config_path)
+    app = main_mod.create_app(settings=settings)
 
     @app.get("/_test_params_echo")
     async def _echo(request: Request) -> dict:

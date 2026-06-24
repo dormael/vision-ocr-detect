@@ -3,6 +3,12 @@
 Reads `config.json` from the project root (or path given by `VISION_OCR_CONFIG`
 env var). Validates structure with pydantic. Fail fast on bad config so the
 server never boots into a half-initialized state.
+
+Environment variables and `.env` (project root) are honored via pydantic-
+settings' BaseSettings: any field populated by env at process start takes
+precedence over the same key in `config.json`. The primary use case is
+secret material — `OPENROUTER_API_KEY` can live in `.env` or be exported
+in the shell and override whatever (typically `null`) is in `config.json`.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ServerConfig(BaseModel):
@@ -48,9 +55,29 @@ class ProviderConfig(BaseModel):
     cost_per_1k_output_tokens: float = Field(default=0.0, ge=0)
 
 
-class Settings(BaseModel):
-    """Top-level config."""
+class Settings(BaseSettings):
+    """Top-level config.
 
+    Inherits `BaseSettings` (instead of plain `BaseModel`) so a project-
+    root `.env` file is loaded on instantiation. Priority order:
+      1. Process env vars (e.g. `OPENROUTER_API_KEY`)
+      2. `.env` file values
+      3. `config.json` values (via `Settings.model_validate(...)` in
+         `load_settings`)
+      4. Field defaults
+
+    Note: only top-level scalar fields receive env-var mapping
+    automatically. Nested fields like `providers.openrouter.api_key`
+    are populated from config.json; provider classes then read the
+    `OPENROUTER_API_KEY` env var directly as a fallback if `api_key`
+    ends up `None`.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 
@@ -72,6 +99,7 @@ def find_config_path() -> Path:
     1. `VISION_OCR_CONFIG` env var (absolute or relative)
     2. `./config.json` (cwd)
     """
+
     import os
 
     env = os.environ.get("VISION_OCR_CONFIG")
@@ -81,7 +109,11 @@ def find_config_path() -> Path:
 
 
 def load_settings(path: Path | None = None) -> Settings:
-    """Load and validate config.json. Raises FileNotFoundError or ValueError."""
+    """Load and validate config.json. Raises FileNotFoundError or ValueError.
+
+    Note: `.env` (if present at project root) is read by BaseSettings at
+    instantiation, so callers get any env-var overrides automatically.
+    """
     target = path or find_config_path()
     if not target.exists():
         raise FileNotFoundError(

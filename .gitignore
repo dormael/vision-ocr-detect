@@ -21,6 +21,7 @@ config.json
 profiles.json
 *.json.lock
 *.json.tmp
+/.env
 
 # OS / IDE
 .DS_Store
