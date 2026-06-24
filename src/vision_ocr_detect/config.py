@@ -42,6 +42,12 @@ class ProviderConfig(BaseModel):
     from the provider's published pricing — `0.0` is allowed (free
     tier) but `cost_usd` will report `0.0` for those calls.
 
+    TODO: when introducing per-model pricing (e.g. qwen2.5-vl-72b is
+    priced differently from qwen3-vl-32b on OpenRouter), this flat
+    per-provider rate needs to become a function `(model) -> rate`.
+    For now, one rate per provider is enough — see README
+    'Configuration' for the current pricing lookup flow.
+
     For openrouter, `api_key` is required; set it via the
     `OPENROUTER_API_KEY` environment variable (or hardcode in
     `config.json` for self-hosted deployments — not recommended).
