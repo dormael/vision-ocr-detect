@@ -6,8 +6,10 @@ profiles (provider + model + prompt) at runtime, then call
 
 - Built with **FastAPI** + **httpx** + **Pillow** + **pydantic v2**
 - Single-file config and profile store (no DB)
-- Pluggable providers — `ollama` today, OpenAI-compatible vLLM / others
-  later
+- Two providers wired:
+  - `ollama` (local) — default
+  - `openrouter` (cloud, OpenAI-compatible) — set `OPENROUTER_API_KEY`
+    and add the `openrouter` block to `config.json`
 - Image preprocessing pipeline:
   `crop → preprocess → scale → resize → encode`
   (PNG / JPEG / WebP / GIF input; `fit`: fill / contain / cover;
@@ -16,6 +18,9 @@ profiles (provider + model + prompt) at runtime, then call
   prompt / temperature / seed) and `response_format` (`"json"` → `parsed`
   populated on success, `null` on parse failure)
 - Concurrency-capped via `asyncio.Semaphore`
+- `.env` file in the project root is auto-loaded via pydantic-settings
+  (useful for `OPENROUTER_API_KEY` and similar secrets — see
+  [Configuration](#configuration-configjson))
 
 ## Install
 
@@ -26,15 +31,23 @@ cp profiles.example.json profiles.json
 ```
 
 Edit `config.json` to point at your ollama instance (default is
-`http://localhost:11434`).
+`http://localhost:11434`). To use OpenRouter, see
+[Configuration](#configuration-configjson).
 
 ## Run
 
 ```bash
 uv run vision-ocr-detect          # uses config.json
 # or
-uv run uvicorn vision_ocr_detect.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn vision_ocr_detect.main:app --host 0.0.0.0 --port 8000 \
+  --log-config logging.json
 ```
+
+The `--log-config logging.json` flag enables the structured access log
+(format: `client_addr - "request_line" status_code`, plus a
+`vision_ocr_detect.request` line with `method/path/status/elapsed_ms`
+and optional `params=<json>` for endpoints that populate
+`request.state.log_params`).
 
 OpenAPI docs at `http://localhost:8000/docs`.
 
@@ -49,6 +62,18 @@ OpenAPI docs at `http://localhost:8000/docs`.
 | `POST`   | `/api/profiles`         | `{name, provider, model, prompt, description?, tags?}` | 201 / 409 (dup) / 422 (bad name / tags) / 400 (unknown provider) |
 | `PUT`    | `/api/profiles/{name}`  | partial `{provider?, model?, prompt?, description?, tags?}` | 200 / 404 / 422 (PATCH-style: omitted fields preserved) |
 | `DELETE` | `/api/profiles/{name}`  | — | 204 / 404 |
+
+Bundled profiles (loaded at startup if present in `profiles.json`):
+
+| Name | Provider | Model | Notes |
+|---|---|---|---|
+| `interpark-layout` | `local-ollama` | `qwen2.5vl:7b` | default; 7B local vision model, fast |
+| `interpark-layout-32b` | `openrouter` | `qwen/qwen3-vl-32b-instruct` | requires `OPENROUTER_API_KEY`; newer-generation 32B for higher accuracy |
+| `interpark-layout-72b` | `openrouter` | `qwen/qwen2.5-vl-72b-instruct` | requires `OPENROUTER_API_KEY`; 72B for highest accuracy, slower and paid |
+
+To enable the OpenRouter profiles, add the `openrouter` block to
+`config.json` (see [Configuration](#configuration-configjson)) and
+export `OPENROUTER_API_KEY`.
 
 Profile fields beyond `name/provider/model/prompt`:
 - `description: string | null` — free-text, max 500 chars
@@ -346,18 +371,55 @@ curl -X POST localhost:8000/api/detect \
       "timeout_seconds": 300,
       "cost_per_1k_input_tokens": 0.0,
       "cost_per_1k_output_tokens": 0.0
+    },
+    "openrouter": {
+      "type": "openrouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key": null,
+      "timeout_seconds": 300,
+      "cost_per_1k_input_tokens": 0.0,
+      "cost_per_1k_output_tokens": 0.0
     }
   }
 }
 ```
 
-`cost_per_1k_input_tokens` / `cost_per_1k_output_tokens` (USD) drive the
-`cost_usd` field in detect responses. Leave at `0.0` for local ollama.
+### Field reference
 
-Override the path with `VISION_OCR_CONFIG=...` (same for
-`VISION_OCR_PROFILES`).
+- `cost_per_1k_input_tokens` / `cost_per_1k_output_tokens` (USD) drive
+  the `cost_usd` field in detect responses. Leave at `0.0` for local
+  ollama; populate from the provider's published pricing for cloud
+  providers (OpenRouter shows per-model pricing on each model page).
+- `api_key`: required for cloud providers. If `null` in `config.json`,
+  the provider class falls back to an environment variable — see
+  [Secrets (`api_key`)](#secrets-api_key).
+
+### Secrets (`api_key`)
+
+API keys shouldn't live in `config.json` (which is often committed or
+shared). Two options, in priority order:
+
+1. **Environment variable** — set `OPENROUTER_API_KEY=sk-or-...` in the
+   process environment. The provider reads it directly.
+2. **`.env` file** — write a single line to `.env` at the project root:
+   ```
+   OPENROUTER_API_KEY=sk-or-v1-...
+   ```
+   pydantic-settings loads it automatically at startup.
+   `.env` is in `.gitignore` so secrets stay out of the repo.
+
+Process env var wins over `.env` wins over `config.json`. Explicit
+`api_key` in `config.json` is the lowest-priority override (useful for
+single-tenant self-hosted deployments, otherwise avoid).
+
+### Path overrides
+
+- `VISION_OCR_CONFIG=...` — alternate `config.json` path
+- `VISION_OCR_PROFILES=...` — alternate `profiles.json` path
 
 ## Adding a new provider type
+
+OpenRouter is already wired as a reference. To add another:
 
 1. Implement `VisionProvider` in `src/vision_ocr_detect/providers/<name>.py`.
 2. Register the builder in `registry._BUILDERS`.
