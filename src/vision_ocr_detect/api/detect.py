@@ -368,6 +368,27 @@ async def detect(
                 detail=f"profile references unknown provider '{prof.provider}'",
             )
 
+        # --- cross-provider response_format check ---
+        # openrouter's gateway rejects the simple Literal["json"] form
+        # (would 400 from upstream → 502 propagated to the client).
+        # Surface a clear 422 here instead so clients know to switch
+        # to OpenAI's `{"type": "json_object"}` or a full json_schema
+        # object. ollama accepts both forms, so this guard only fires
+        # for openrouter.
+        if (
+            parsed.response_format == "json"
+            and prof.provider == "openrouter"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "response_format='json' (simple form) is not supported "
+                    "by the 'openrouter' provider. Use OpenAI's "
+                    "{'type': 'json_object'} or full json_schema object "
+                    "instead — see README 'Examples: per-call overrides'."
+                ),
+            )
+
         # --- image preprocessing ---
         raw = await image.read()
         try:

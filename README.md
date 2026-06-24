@@ -309,6 +309,13 @@ curl -X POST localhost:8000/api/detect \
   -F image=@sample.png \
   -F 'options={"response_format":"json","temperature":0.0,"seed":42}'
 
+# OpenAI-style structured output (required for the `openrouter` provider
+# — its gateway doesn't accept the simple Literal["json"] form)
+curl -X POST localhost:8000/api/detect \
+  -F profile=openrouter-test \
+  -F image=@sample.png \
+  -F 'options={"response_format":{"type":"json_object"},"temperature":0.0,"seed":42}'
+
 # Small-label OCR with sharpening and contrast, then letterboxed 2x upscale
 curl -X POST localhost:8000/api/detect \
   -F profile=ocr \

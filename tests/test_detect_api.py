@@ -779,6 +779,117 @@ def test_response_format_json_schema_invalid_schema_falls_back(client_with_fake)
 
 
 # ----------------------------------------------------------------------
+# Cross-provider response_format validation
+# ----------------------------------------------------------------------
+
+
+def test_response_format_simple_json_rejected_for_openrouter(monkeypatch) -> None:
+    """openrouter doesn't accept the simple Literal['json'] form — its
+    gateway returns 400, which the API layer would otherwise surface
+    as a confusing 502. We reject up-front with a clear 422 telling
+    the client to use OpenAI's object form.
+
+    This test builds a minimal app with both ollama and openrouter
+    registered so we can construct an openrouter profile.
+    """
+    # OpenRouterProvider constructor reads OPENROUTER_API_KEY from
+    # env. Set a dummy value so registry construction doesn't fail.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-dummy")
+
+    from fastapi.testclient import TestClient
+
+    from vision_ocr_detect import deps as deps_mod
+    from vision_ocr_detect import main as main_mod
+    from vision_ocr_detect.config import (
+        ProviderConfig,
+        ServerConfig,
+        Settings,
+    )
+    from vision_ocr_detect.providers.registry import ProviderRegistry
+
+    settings = Settings(
+        server=ServerConfig(host="127.0.0.1", port=8765, max_concurrent_requests=2),
+        providers={
+            "local-ollama": ProviderConfig(
+                type="ollama", base_url="http://localhost:11434"
+            ),
+            # api_key is None; the openrouter provider constructor
+            # requires OPENROUTER_API_KEY in env, but we never reach
+            # the call site — the 422 fires before provider.detect().
+            "openrouter": ProviderConfig(
+                type="openrouter",
+                base_url="https://openrouter.ai/api/v1",
+            ),
+        },
+    )
+    app = main_mod.create_app(settings=settings)
+
+    # Register FakeProvider for both — the 422 fires before either is
+    # called, but registry construction needs them present.
+    class _Stub:
+        name = "stub"
+        async def detect(self, *args, **kwargs):  # pragma: no cover
+            raise RuntimeError("should not be called in this test")
+        async def list_models(self):  # pragma: no cover
+            return []
+        async def aclose(self): pass
+
+    registry = ProviderRegistry()
+    registry.register("local-ollama", _Stub())
+    registry.register("openrouter", _Stub())
+    app.dependency_overrides[deps_mod.get_provider_registry] = lambda: registry
+
+    with TestClient(app) as client:
+        # Create an openrouter profile via the API. Unique name so the
+        # test is repeatable when profiles.json persists across runs.
+        import uuid
+        profile_name = f"openrouter-test-{uuid.uuid4().hex[:8]}"
+        r = client.post(
+            "/api/profiles",
+            json={
+                "name": profile_name,
+                "provider": "openrouter",
+                "model": "qwen/qwen3-vl-32b-instruct",
+                "prompt": "extract layout",
+            },
+        )
+        assert r.status_code == 201, r.text
+
+        # Now hit /api/detect with the simple "json" form — should 422
+        # with a message pointing at the OpenAI object form.
+        r = client.post(
+            "/api/detect",
+            data={
+                "profile": profile_name,
+                "options": json.dumps({"response_format": "json"}),
+            },
+            files={"image": ("img.png", _png(), "image/png")},
+        )
+        assert r.status_code == 422, r.text
+        body = r.json()
+        assert "openrouter" in body["detail"].lower()
+        assert "json_object" in body["detail"] or "json_schema" in body["detail"]
+
+        # Omit response_format → still hits the openrouter profile and
+        # the stub, which raises RuntimeError → mapped to 502. The point
+        # of this assertion is just to confirm the guard above doesn't
+        # fire when the simple form isn't used.
+        r = client.post(
+            "/api/detect",
+            data={
+                "profile": profile_name,
+                "options": json.dumps({"temperature": 0.0}),
+            },
+            files={"image": ("img.png", _png(), "image/png")},
+        )
+        assert r.status_code == 502, r.text
+
+        # Clean up so the profile doesn't pollute profiles.json on
+        # subsequent test runs.
+        client.delete(f"/api/profiles/{profile_name}")
+
+
+# ----------------------------------------------------------------------
 # lenient JSON parser — production-grade quirk tolerance
 # ----------------------------------------------------------------------
 
