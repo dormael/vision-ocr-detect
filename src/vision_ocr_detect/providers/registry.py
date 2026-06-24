@@ -15,12 +15,14 @@ from vision_ocr_detect.providers.base import (
     VisionProvider,
 )
 from vision_ocr_detect.providers.ollama import OllamaProvider
+from vision_ocr_detect.providers.openrouter import OpenRouterProvider
 
 
 # Dispatch table for new provider types. Each factory takes the configured
 # name + ProviderConfig and returns a VisionProvider.
 _BUILDERS: dict[str, Callable[[str, ProviderConfig], VisionProvider]] = {
     "ollama": OllamaProvider,
+    "openrouter": OpenRouterProvider,
 }
 
 
