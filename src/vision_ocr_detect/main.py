@@ -26,23 +26,37 @@ request_logger = logging.getLogger("vision_ocr_detect.request")
 # (request time in seconds, %.3f) and `size` (response bytes). Defaults
 # are kept for everything else so the format stays close to vanilla
 # uvicorn — easy to grep, easy to read.
+#
+# The source of truth is `logging.json` at the repo root, applied via
+# uvicorn's `--log-config` flag at startup. This dict mirrors the file
+# so `python -m vision_ocr_detect.main` (which calls uvicorn.run with
+# `log_config=LOG_CONFIG`) produces the same setup. Keep them in sync
+# when adding new loggers or handlers.
 LOG_CONFIG: dict[str, object] = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
-            "format": "%(levelprefix)s %(message)s",
+            "format": "%(levelname)s: %(message)s",
+        },
+        "default_with_time": {
+            "format": "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         },
         "access": {
-            "format": (
-                '%(client_addr)s - "%(request_line)s" '
-                "%(status_code)s duration=%(d).3fs size=%(b)sB"
+            "()": "uvicorn.logging.AccessFormatter",
+            "fmt": (
+                '%(client_addr)s - "%(request_line)s" %(status_code)s'
             ),
         },
     },
     "handlers": {
         "default": {
             "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+        },
+        "default_with_time": {
+            "formatter": "default_with_time",
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stderr",
         },
@@ -57,6 +71,15 @@ LOG_CONFIG: dict[str, object] = {
         "uvicorn.error": {"level": "INFO"},
         "uvicorn.access": {
             "handlers": ["access"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Application-level request telemetry emitted by the
+        # middleware below. Goes to stderr with timestamps so a
+        # grep on /tmp/ocr-server-logs/server.log can correlate
+        # application logs against uvicorn access lines.
+        "vision_ocr_detect.request": {
+            "handlers": ["default_with_time"],
             "level": "INFO",
             "propagate": False,
         },
