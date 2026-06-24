@@ -6,7 +6,8 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from pathlib import Path
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Request
 
@@ -23,69 +24,36 @@ from vision_ocr_detect.services.profile_store import ProfileStore
 # redirected by the same config that handles uvicorn's loggers.
 request_logger = logging.getLogger("vision_ocr_detect.request")
 
-# Uvicorn log config: extends the default access format with `duration`
-# (request time in seconds, %.3f) and `size` (response bytes). Defaults
-# are kept for everything else so the format stays close to vanilla
-# uvicorn — easy to grep, easy to read.
-#
-# The source of truth is `logging.json` at the repo root, applied via
-# uvicorn's `--log-config` flag at startup. This dict mirrors the file
-# so `python -m vision_ocr_detect.main` (which calls uvicorn.run with
-# `log_config=LOG_CONFIG`) produces the same setup. Keep them in sync
-# when adding new loggers or handlers.
-LOG_CONFIG: dict[str, object] = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "format": "%(levelname)s: %(message)s",
-        },
-        "default_with_time": {
-            "format": "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        },
-        "access": {
-            "()": "uvicorn.logging.AccessFormatter",
-            "fmt": (
-                '%(client_addr)s - "%(request_line)s" %(status_code)s'
-            ),
-        },
-    },
-    "handlers": {
-        "default": {
-            "formatter": "default",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-        },
-        "default_with_time": {
-            "formatter": "default_with_time",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-        },
-        "access": {
-            "formatter": "access",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout",
-        },
-    },
-    "loggers": {
-        "uvicorn": {"handlers": ["default"], "level": "INFO"},
-        "uvicorn.error": {"level": "INFO"},
-        "uvicorn.access": {
-            "handlers": ["access"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        # Application-level request telemetry emitted by the
-        # middleware below. Goes to stderr with timestamps so a
-        # grep on /tmp/ocr-server-logs/server.log can correlate
-        # application logs against uvicorn access lines.
-        "vision_ocr_detect.request": {
-            "handlers": ["default_with_time"],
-            "level": "INFO",
-            "propagate": False,
-        },
-    },
-}
+# Path to the canonical uvicorn log config. Direct `uvicorn ...` CLI
+# invocations pass `--log-config logging.json`; `python -m
+# vision_ocr_detect.main` calls `load_log_config()` so both paths
+# share the single source of truth (no drift between a Python dict
+# and a JSON file).
+_LOG_CONFIG_PATH = Path("logging.json")
+
+
+def load_log_config(path: Path | None = None) -> dict[str, Any]:
+    """Load uvicorn's logging config from `logging.json` (single source).
+
+    Returns an empty dict when the file is missing or malformed —
+    uvicorn treats that as "use defaults", which is the behavior we
+    want for misconfigured self-hosted deployments.
+
+    The format keys `()...` (factories) survive the JSON round-trip
+    because logging.config.dictConfig reads them from the parsed dict,
+    not from a re-serialization step.
+    """
+    config_path = path or _LOG_CONFIG_PATH
+    if not config_path.exists():
+        return {}
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
 
 
 @asynccontextmanager
@@ -220,7 +188,7 @@ def main() -> None:
         host=settings.server.host,
         port=settings.server.port,
         reload=False,
-        log_config=LOG_CONFIG,
+        log_config=load_log_config(),
     )
 
 
