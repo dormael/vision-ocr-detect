@@ -1,17 +1,26 @@
 {
+  "$comment_top": "vision-ocr-detect example config. Copy to config.json and edit. Env-var overrides win over file values: see README 'Secrets (api_key)' for the priority chain. pydantic-settings (Settings class) auto-loads .env from the project root if present; $comment_* fields below are documentation only and are ignored at parse time (extra='ignore' on Settings).",
+
   "server": {
+    "$comment_server": "HTTP listener settings. max_concurrent_requests caps simultaneous /api/detect calls; over-cap requests get 503 + Retry-After: 1 immediately.",
     "host": "0.0.0.0",
     "port": 8000,
     "max_concurrent_requests": 1
   },
+
   "providers": {
+    "$comment_providers": "Each entry registers a vision/OCR backend. Set 'type' to a value supported by src/vision_ocr_detect/providers/{type}.py. The provider name (key) is what profiles reference via 'provider' field — keep it stable once profiles depend on it.",
+
     "local-ollama": {
+      "$comment_ollama": "Default. Free, local, fast. Native /api/generate is tried first; OpenAI-compat /v1 fallback for models that don't speak native. api_key is unused (set null).",
       "type": "ollama",
       "base_url": "http://localhost:11434",
       "api_key": null,
       "timeout_seconds": 300
     },
+
     "openrouter": {
+      "$comment_openrouter": "Cloud gateway at https://openrouter.ai — OpenAI-compatible. api_key=null falls back to OPENROUTER_API_KEY env var (or the .env file at project root, see README 'Secrets (api_key)'). cost_per_1k_* should be set to OpenRouter's published per-model pricing for accurate cost_usd in detect responses; 0.0 is a placeholder that always reports free.",
       "type": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": null,
