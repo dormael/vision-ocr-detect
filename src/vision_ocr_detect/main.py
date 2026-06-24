@@ -75,6 +75,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store.reload()  # eager load so /api/profiles works on first request
     app.state.profile_store = store
 
+    # Pre-flight warning: any profile that points at the `openrouter`
+    # provider needs OPENROUTER_API_KEY (env var or .env). Surface a
+    # clear warning at startup so operators don't have to wait for a
+    # 502 at first call to learn their config is incomplete. The
+    # OpenRouterProvider constructor itself raises ValueError on
+    # missing key, which would still crash the registry build below —
+    # this warning only softens the diagnostic for the case where
+    # profiles reference openrouter but the key isn't set.
+    import os
+    openrouter_profiles = [
+        p.name for p in store.list() if p.provider == "openrouter"
+    ]
+    if openrouter_profiles and not os.environ.get("OPENROUTER_API_KEY"):
+        request_logger.warning(
+            "OPENROUTER_API_KEY is not set; openrouter profiles will fail "
+            "at runtime: %s. Set the env var (or write to .env) and restart.",
+            openrouter_profiles,
+        )
+
     registry = ProviderRegistry.from_settings(settings)
     app.state.provider_registry = registry
 

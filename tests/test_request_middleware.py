@@ -140,3 +140,77 @@ def test_middleware_log_includes_params_json_when_endpoint_sets_them(
     assert '"options"' in msg
     assert '"profile": "interpark-layout"' in msg
     assert '"response_format": "json"' in msg
+
+
+def test_lifespan_warns_when_openrouter_profile_lacks_api_key(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lifespan startup that finds openrouter profiles in the store
+    but no OPENROUTER_API_KEY in env should emit a clear warning
+    listing the affected profiles — so operators don't have to wait
+    for a 502 at first call to discover their config is incomplete.
+
+    Uses the real config.json / profiles.json on disk (which contain
+    bundled openrouter profiles interpark-layout-32b / -72b) — no need
+    to fabricate a custom config. The warning fires on any startup
+    that finds openrouter profiles and no env var.
+    """
+    from fastapi.testclient import TestClient
+
+    from vision_ocr_detect import main as main_mod
+
+    # Make sure no key is set via any path (.env / shell / test env).
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="vision_ocr_detect.request"):
+        app = main_mod.create_app()
+        with TestClient(app) as client:
+            client.get("/health")
+
+    warn_records = [
+        rec for rec in caplog.records
+        if rec.name == "vision_ocr_detect.request"
+        and rec.levelno >= logging.WARNING
+        and "OPENROUTER_API_KEY" in rec.getMessage()
+    ]
+    assert len(warn_records) >= 1, (
+        f"expected at least one OPENROUTER_API_KEY warning, got: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    msg = warn_records[-1].getMessage()
+    # Warning should list at least one openrouter profile (32b / 72b
+    # from the bundled profiles).
+    assert "interpark-layout-32b" in msg or "interpark-layout-72b" in msg, (
+        f"warning should list a bundled openrouter profile: {msg}"
+    )
+
+
+def test_lifespan_silent_when_openrouter_key_is_set(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When OPENROUTER_API_KEY is present, no warning is emitted at
+    startup, even with openrouter profiles in the bundled store."""
+    from fastapi.testclient import TestClient
+
+    from vision_ocr_detect import main as main_mod
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-dummy")
+
+    with caplog.at_level(logging.WARNING, logger="vision_ocr_detect.request"):
+        app = main_mod.create_app()
+        with TestClient(app) as client:
+            client.get("/health")
+
+    warn_records = [
+        rec for rec in caplog.records
+        if rec.name == "vision_ocr_detect.request"
+        and rec.levelno >= logging.WARNING
+        and "OPENROUTER_API_KEY" in rec.getMessage()
+    ]
+    assert len(warn_records) == 0, (
+        f"unexpected OPENROUTER_API_KEY warning despite key present: "
+        f"{[r.getMessage() for r in warn_records]}"
+    )

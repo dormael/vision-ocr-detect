@@ -58,11 +58,23 @@ def test_openrouter_falls_back_to_env_var(monkeypatch) -> None:
     assert p._client.headers["Authorization"] == "Bearer sk-or-env-key"
 
 
-def test_openrouter_raises_when_no_key_available(monkeypatch) -> None:
-    """No config key, no env var → fail fast at __init__, not at first call."""
+@pytest.mark.asyncio
+async def test_openrouter_detect_raises_when_no_key_available(monkeypatch) -> None:
+    """No config key, no env var → server boots (lifespan emits a
+    warning), but detect() fails with a clear RuntimeError that the
+    API layer maps to 502."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-        OpenRouterProvider("openrouter", _make_config(api_key=None))
+    p = OpenRouterProvider("openrouter", _make_config(api_key=None))
+    try:
+        with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+            await p.detect(
+                b"\x89PNG fake",
+                "image/png",
+                "qwen/qwen3-vl-32b-instruct",
+                "prompt",
+            )
+    finally:
+        await p.aclose()
 
 
 # --- vision classification ---------------------------------------------

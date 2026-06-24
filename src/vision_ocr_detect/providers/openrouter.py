@@ -81,19 +81,21 @@ class OpenRouterProvider:
         self.name = name
         self._config = config
         api_key = config.api_key or os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            raise ValueError(
-                f"provider '{name}' requires api_key in config or "
-                f"OPENROUTER_API_KEY env var"
-            )
         self._api_key = api_key
         # OpenRouter's OpenAI-compat surface — strip a trailing slash
         # so we don't end up with `//chat/completions` in the path.
         self._base_url = config.base_url.rstrip("/")
+        # Always build the client — even without a key — so lifespan
+        # startup doesn't fail. detect() raises a clear error if
+        # called without a key. The startup-time warning (if any) is
+        # the lifespan's responsibility (see main.py).
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(config.timeout_seconds),
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
         )
 
     async def detect(
@@ -119,6 +121,15 @@ class OpenRouterProvider:
         attribution. We skip these for now — they're optional and add
         little value for an internal / server-to-server use case.
         """
+        if not self._api_key:
+            # Constructor accepts no key so server can boot and
+            # surface the warning; the failure surfaces here at call
+            # time, which the API layer maps to 502.
+            raise RuntimeError(
+                "openrouter provider is not configured: set "
+                "OPENROUTER_API_KEY env var (or api_key in config.json) "
+                "and restart"
+            )
         data_uri = (
             f"data:{mime_type};base64,"
             f"{base64.b64encode(image).decode('ascii')}"
