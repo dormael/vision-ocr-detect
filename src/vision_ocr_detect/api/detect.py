@@ -306,6 +306,13 @@ async def detect(
     registry: ProviderRegistry = Depends(get_provider_registry),
 ) -> DetectResponse:
     parsed = _parse_options(options)
+    # Surface the request's identifying fields to the request-telemetry
+    # middleware. Stashed on `request.state` so the middleware can
+    # append `params={...}` to its single log line per request.
+    request.state.log_params = {
+        "profile": profile,
+        "options": parsed.model_dump(mode="json", exclude_none=True),
+    }
     semaphore: asyncio.Semaphore = request.app.state.detect_semaphore
 
     # --- concurrency gate ---

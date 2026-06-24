@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -140,18 +141,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         over `/tmp/ocr-server-logs/server.log` can answer "how long did
         request X take?" without parsing the access-log format. Also
         exposes the timing to clients via the response header.
+
+        Endpoints that want extra context (e.g. `/api/detect` with its
+        `profile` and `options`) can stash a JSON-serializable dict on
+        `request.state.log_params` before returning — the middleware
+        appends it as `params={...}` on the same log line. The
+        `default=str` on json.dumps keeps non-JSON-native types (e.g.
+        enums) from breaking the log.
         """
         started = time.perf_counter()
         response = await call_next(request)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         response.headers["X-Process-Time"] = f"{elapsed_ms}ms"
-        request_logger.info(
-            "method=%s path=%s status=%d elapsed_ms=%d",
-            request.method,
-            request.url.path,
-            response.status_code,
-            elapsed_ms,
-        )
+
+        params = getattr(request.state, "log_params", None)
+        if params is not None:
+            request_logger.info(
+                "method=%s path=%s status=%d elapsed_ms=%d params=%s",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+                json.dumps(params, sort_keys=True, default=str),
+            )
+        else:
+            request_logger.info(
+                "method=%s path=%s status=%d elapsed_ms=%d",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+            )
         return response
 
     @app.get("/health")

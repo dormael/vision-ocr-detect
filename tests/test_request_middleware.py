@@ -12,6 +12,7 @@ import logging
 import re
 
 import pytest
+from fastapi import Request
 
 
 def _make_client():
@@ -76,3 +77,55 @@ def test_middleware_log_includes_status_for_error_response(
     msg = records[-1].getMessage()
     assert "status=404" in msg
     assert "path=/api/profiles/does-not-exist" in msg
+
+
+def test_middleware_log_omits_params_when_endpoint_does_not_set_them(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Endpoints that don't populate `request.state.log_params` should
+    produce a log line without the `params=` suffix (so non-detect
+    routes don't carry empty noise)."""
+    with caplog.at_level(logging.INFO, logger="vision_ocr_detect.request"):
+        with _make_client() as client:
+            r = client.get("/api/profiles/does-not-exist")
+            assert r.status_code == 404
+
+    records = [r for r in caplog.records if r.name == "vision_ocr_detect.request"]
+    msg = records[-1].getMessage()
+    assert "params=" not in msg, f"unexpected params in non-detect log: {msg}"
+
+
+def test_middleware_log_includes_params_json_when_endpoint_sets_them(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An endpoint that stashes a dict on `request.state.log_params`
+    should see it appear as `params=<json>` on the same log line —
+    handy for grepping `/api/detect` calls by profile / options."""
+    from fastapi.testclient import TestClient
+
+    from vision_ocr_detect.main import create_app
+
+    app = create_app()
+
+    @app.get("/_test_params_echo")
+    async def _echo(request: Request) -> dict:
+        request.state.log_params = {
+            "profile": "interpark-layout",
+            "options": {"response_format": "json", "max_tokens": 4096},
+        }
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        with caplog.at_level(logging.INFO, logger="vision_ocr_detect.request"):
+            r = client.get("/_test_params_echo")
+            assert r.status_code == 200, f"body: {r.text}"
+
+    records = [r for r in caplog.records if r.name == "vision_ocr_detect.request"]
+    msg = records[-1].getMessage()
+    assert "params=" in msg
+    # JSON payload is on the same line — assert both keys appear
+    # in order, sorted by `sort_keys=True`.
+    assert '"max_tokens": 4096' in msg
+    assert '"options"' in msg
+    assert '"profile": "interpark-layout"' in msg
+    assert '"response_format": "json"' in msg
