@@ -32,6 +32,3 @@ profiles.json
 # Tooling state (claude / serena caches)
 .claude/
 .serena/
-
-# Isolated worktrees
-.worktrees/
