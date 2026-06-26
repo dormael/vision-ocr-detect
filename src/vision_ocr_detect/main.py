@@ -116,7 +116,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="vision-ocr-detect",
         version="0.1.0",
-        description="Local ollama vision/OCR HTTP API",
+        summary="Vision/OCR HTTP API wrapping local & hosted vision models",
+        description=(
+            "## Overview\n\n"
+            "Run vision/OCR models over HTTP. Manage named profiles "
+            "(provider + model + prompt) at runtime, then call "
+            "`POST /api/detect` with an image to get extracted text back.\n\n"
+            "## Quick start\n\n"
+            "1. `uv sync && cp config.example.json config.json && "
+            "cp profiles.example.json profiles.json`\n"
+            "2. Edit `config.json` to point at your ollama instance\n"
+            "3. `uv run vision-ocr-detect`\n"
+            "4. OpenAPI/Swagger UI at `/docs`, ReDoc at `/redoc`\n\n"
+            "## Key concepts\n\n"
+            "- **Profile**: named bundle of (provider, model, prompt). "
+            "Persisted to `profiles.json`.\n"
+            "- **Provider**: backend (ollama local, openrouter cloud). "
+            "Configured in `config.json`.\n"
+            "- **Detect**: one-shot image-to-text call. "
+            "Concurrency-capped per server.\n"
+        ),
+        openapi_tags=[
+            {
+                "name": "detect",
+                "description": "Run vision/OCR on an image.",
+            },
+            {
+                "name": "profiles",
+                "description": "CRUD for named prompt+model bundles.",
+            },
+            {
+                "name": "models",
+                "description": "Enumerate available vision models.",
+            },
+        ],
+        contact={
+            "name": "vision-ocr-detect",
+            "url": "https://github.com/dormael/vision-ocr-detect",
+        },
         lifespan=lifespan,
     )
 
