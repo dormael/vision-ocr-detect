@@ -49,6 +49,20 @@ The `--log-config logging.json` flag enables the structured access log
 and optional `params=<json>` for endpoints that populate
 `request.state.log_params`).
 
+### Response headers and per-request logs
+
+Every response carries `X-Process-Time: <ms>ms`, set by the request
+middleware in `main.py`. The middleware also emits one
+`vision_ocr_detect.request` log line per request:
+
+```
+method=POST path=/api/detect status=200 elapsed_ms=1247 params={"profile": "interpark-layout", "options": {"response_format": "json"}}
+```
+
+Other endpoints log the same line without the `params=` segment.
+Filter the access log with `grep vision_ocr_detect.request` for the
+per-request view; use `X-Process-Time` for client-side timing.
+
 OpenAPI docs at `http://localhost:8000/docs`.
 
 ## API
@@ -89,7 +103,7 @@ these fields loads with `tags=[]`, `description=null`.
 POST /api/detect
 Content-Type: multipart/form-data
 
-  image:    <file>              (required; PNG / JPEG / WebP / GIF;
+  image:    <file>              (required; PNG / JPEG / WebP / GIF; max 20 MiB;
                                 animated GIFs use the first frame)
   profile:  <string>            (required — profile name)
   options:  <JSON string>       (optional, see below)
@@ -249,6 +263,24 @@ The `tokens_in/out`, `cost_usd`, `seed_used` fields are best-effort:
   models (granite-vision, minicpm-v, qwen2.5vl, etc.) work on the
   native surface; the fallback exists for models that only speak
   OpenAI-compat.
+
+**422 with truncation signature:** when JSON parsing or JSON Schema
+validation fails, the response `detail` carries a structured fingerprint
+to distinguish "the model hit `max_tokens` mid-value" from "the model
+emitted malformed JSON". The string contains the fields:
+
+| field | meaning |
+|---|---|
+| `text_length` | total characters in the raw model output |
+| `last_nonspace_char` | the trailing non-whitespace character |
+| `ends_with_unclosed_brace` | `true` when the last char is `{`, `[`, `,`, `:`, or `"` — strong truncation signal |
+| `last_nonempty_line` | the last non-blank line (truncated to 200 chars) |
+| `suggestion` | remediation hint, currently `"Try response_format=json (lenient) or max_tokens=16384."` |
+
+A `true` `ends_with_unclosed_brace` is usually truncation: raise
+`max_tokens` or fall back to `response_format: "json"` (lenient mode).
+A `false` value with a parse error usually means a prompt or model
+change is needed.
 
 Error codes: `404` (profile / image issue), `422` (bad options / image),
 `502` (provider failure), `503` (concurrency cap reached, with
@@ -412,10 +444,53 @@ Process env var wins over `.env` wins over `config.json`. Explicit
 `api_key` in `config.json` is the lowest-priority override (useful for
 single-tenant self-hosted deployments, otherwise avoid).
 
+### `.env` file format
+
+`.env` is parsed by pydantic-settings' `BaseSettings` on startup.
+One `KEY=value` pair per line; comments start with `#`:
+
+```ini
+# .env (project root; .gitignored)
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+See `.env.example` at the repo root for the canonical template.
+Process env vars override `.env`, which overrides `config.json`.
+
 ### Path overrides
 
 - `VISION_OCR_CONFIG=...` — alternate `config.json` path
 - `VISION_OCR_PROFILES=...` — alternate `profiles.json` path
+
+Example:
+
+```bash
+VISION_OCR_CONFIG=/etc/vision-ocr/config.json \
+VISION_OCR_PROFILES=/var/lib/vision-ocr/profiles.json \
+  uv run vision-ocr-detect
+```
+
+Both paths are resolved against the process CWD when relative.
+
+### Provider internals
+
+- **Ollama** (`local-ollama`): tries the native `/api/generate`
+  surface first. If ollama returns 404 or `model-not-found` (some
+  builds report this as 200 + `body.error`), the provider falls back
+  to the OpenAI-compat `/v1/chat/completions` surface for the same
+  call. The successful surface is recorded in
+  `DetectResponse.endpoint_used` (`"native"` or `"openai"`), so
+  consumers can see which path served a given request. Both surfaces
+  accept vision models; vision-only ones like granite-vision and
+  minicpm-v only work on the native surface.
+
+- **OpenRouter** (`openrouter`): single OpenAI-compat path
+  (`/api/v1/chat/completions`). The constructor does **not** raise
+  when `OPENROUTER_API_KEY` is missing — the lifespan startup logs
+  a warning listing the affected profiles, and the first `detect`
+  call raises a `RuntimeError` that the API layer surfaces as 502.
+  This keeps the server bootable for diagnosis even with incomplete
+  config.
 
 ## Adding a new provider type
 
