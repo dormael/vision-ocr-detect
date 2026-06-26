@@ -91,3 +91,8 @@ def test_profile_create_example_validates() -> None:
     schema = ProfileCreate.model_json_schema()
     example = schema["examples"][0]
     ProfileCreate.model_validate(example)
+
+
+def test_profile_update_example_validates() -> None:
+    schema = ProfileUpdate.model_json_schema()
+    ProfileUpdate.model_validate(schema["examples"][0])

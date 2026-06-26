@@ -93,7 +93,7 @@ class ProfileUpdate(BaseModel):
         json_schema_extra={
             "examples": [
                 {"model": "qwen2.5vl:7b"},
-                {"temperature": 0.0, "seed": 42, "description": None, "tags": []},
+                {"description": None, "tags": []},
             ]
         },
     )
