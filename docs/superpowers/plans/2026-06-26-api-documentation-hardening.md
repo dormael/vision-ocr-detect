@@ -38,7 +38,8 @@
 - README additions must keep the existing markdown structure (no reordered sections, no renamed anchors).
 - `.env.example` is committed to git. `.env` stays in `.gitignore` (already excluded at `/.env`).
 - Commit messages follow existing repo convention: `<type>(<scope>): <subject>` for code, `docs(...)` for documentation.
-- Run `uv run pytest` after each task. Existing 138 tests must still pass.
+- Run `uv run pytest` after each task. Existing 137 unit/integration tests must still pass (`uv run pytest --ignore=tests/test_provider_smoke.py`); the smoke test is exercised separately and is out of scope for this work.
+- The `client_with_fake` fixture in `tests/conftest.py` provides a `TestClient` with monkeypatched config/profiles paths and a `FakeProvider` in place of `OllamaProvider`. New tests in `tests/test_openapi.py` MUST use this fixture (or the same `monkeypatch_env` + `create_app(settings=...)` + `dependency_overrides` pattern) — importing the module-level `app` from `vision_ocr_detect.main` would trigger the real lifespan, which expects a reachable ollama instance and a real `config.json`. See `tests/conftest.py:131-151` for the canonical pattern.
 - No new dependencies; this work uses stdlib + already-installed packages.
 
 ---
@@ -55,7 +56,7 @@
 
 - [ ] **Step 1: Write failing tests for Layer 1**
 
-Create `tests/test_openapi.py`:
+Create `tests/test_openapi.py`. Use the `client_with_fake` fixture from `tests/conftest.py` — it builds the app with monkeypatched config/profiles paths and a `FakeProvider` so the lifespan runs without touching the real network. **Do not import the module-level `app`** (that triggers the real lifespan with real providers).
 
 ```python
 """OpenAPI schema regression tests.
@@ -70,23 +71,21 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from vision_ocr_detect.main import app
+
+def _schema(client: TestClient) -> dict:
+    return client.get("/openapi.json").json()
 
 
-def _schema() -> dict:
-    # Lifespan pulls in real providers; TestClient handles that for us.
-    with TestClient(app) as client:
-        return client.get("/openapi.json").json()
-
-
-def test_openapi_title_and_version() -> None:
-    schema = _schema()
+def test_openapi_title_and_version(client_with_fake) -> None:
+    client, _ = client_with_fake
+    schema = _schema(client)
     assert schema["info"]["title"] == "vision-ocr-detect"
     assert schema["info"]["version"] == "0.1.0"
 
 
-def test_openapi_description_non_empty_markdown() -> None:
-    schema = _schema()
+def test_openapi_description_non_empty_markdown(client_with_fake) -> None:
+    client, _ = client_with_fake
+    schema = _schema(client)
     desc = schema["info"].get("description", "")
     assert desc.strip(), "app description must not be empty"
     # Must mention a key concept so /docs readers get oriented.
@@ -94,8 +93,9 @@ def test_openapi_description_non_empty_markdown() -> None:
     assert "provider" in desc.lower()
 
 
-def test_openapi_tags_have_descriptions() -> None:
-    schema = _schema()
+def test_openapi_tags_have_descriptions(client_with_fake) -> None:
+    client, _ = client_with_fake
+    schema = _schema(client)
     tags_by_name = {t["name"]: t for t in schema.get("tags", [])}
     for name in ("detect", "profiles", "models"):
         assert name in tags_by_name, f"missing tag {name!r}"
@@ -103,8 +103,9 @@ def test_openapi_tags_have_descriptions() -> None:
         assert desc.strip(), f"tag {name!r} description must not be empty"
 
 
-def test_openapi_contact_present() -> None:
-    schema = _schema()
+def test_openapi_contact_present(client_with_fake) -> None:
+    client, _ = client_with_fake
+    schema = _schema(client)
     contact = schema["info"].get("contact") or {}
     assert contact.get("name") or contact.get("url"), "contact info missing"
 ```
@@ -512,14 +513,17 @@ EXPECTED_SUMMARIES: dict[str, str] = {
 }
 
 
-def _routes_by_path() -> dict[str, dict]:
-    schema = _schema()
+def _routes_by_path(client: TestClient) -> dict[str, dict]:
+    schema = _schema(client)
     return {path: route for path, route in schema["paths"].items()}
 
 
 @pytest.mark.parametrize("path,expected_substring", list(EXPECTED_SUMMARIES.items()))
-def test_route_summary_present(path: str, expected_substring: str) -> None:
-    routes = _routes_by_path()
+def test_route_summary_present(
+    client_with_fake, path: str, expected_substring: str
+) -> None:
+    client, _ = client_with_fake
+    routes = _routes_by_path(client)
     assert path in routes, f"missing route {path}"
     # Each path can have multiple methods; at least one must carry the summary.
     methods = routes[path]
@@ -534,16 +538,18 @@ def test_route_summary_present(path: str, expected_substring: str) -> None:
     )
 
 
-def test_detect_route_description_mentions_json_modes() -> None:
-    routes = _routes_by_path()
+def test_detect_route_description_mentions_json_modes(client_with_fake) -> None:
+    client, _ = client_with_fake
+    routes = _routes_by_path(client)
     post = routes["/api/detect"]["post"]
     desc = (post.get("description") or "").lower()
     assert "json" in desc, "detect description should mention JSON modes"
     assert "schema" in desc, "detect description should mention json_schema"
 
 
-def test_detect_route_documents_422_truncation_signature() -> None:
-    routes = _routes_by_path()
+def test_detect_route_documents_422_truncation_signature(client_with_fake) -> None:
+    client, _ = client_with_fake
+    routes = _routes_by_path(client)
     post = routes["/api/detect"]["post"]
     # The 422 response description or summary should reference truncation.
     blob = " ".join(
