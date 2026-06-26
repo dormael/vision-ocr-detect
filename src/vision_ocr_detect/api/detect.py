@@ -269,7 +269,36 @@ def _validate_against_schema(
             return None
 
 
-@router.post("/detect", response_model=DetectResponse)
+@router.post(
+    "/detect",
+    response_model=DetectResponse,
+    summary="Run vision/OCR on an image",
+    description=(
+        "multipart/form-data with three fields:\n\n"
+        "- `image` (required): PNG / JPEG / WebP / GIF, max 20 MiB. "
+        "Animated GIFs use the first frame.\n"
+        "- `profile` (required): profile name (must exist; see `GET /api/profiles`).\n"
+        "- `options` (optional): JSON string. Three notable options:\n\n"
+        "  - `response_format: \"json\"` — provider is asked to emit JSON; "
+        "server parses leniently (`parsed` may be `null` on parse failure).\n"
+        "  - `response_format: {type: \"json_schema\", json_schema: {...}}` — "
+        "server validates the model's output against the supplied JSON Schema; "
+        "returns 422 on schema mismatch.\n"
+        "  - `profile_override` — per-call (provider, model, prompt, "
+        "temperature, seed) override. Does not persist.\n\n"
+        "**Errors:** 404 if profile missing; 422 on bad options / bad image / "
+        "JSON parse or schema failure (detail includes a truncation signature: "
+        "`text_length`, `last_nonspace_char`, `ends_with_unclosed_brace`, "
+        "`last_nonempty_line`, `suggestion`); 502 if provider fails; 503 with "
+        "`Retry-After: 1` when concurrency cap is reached.\n"
+    ),
+    response_description=(
+        "200 with DetectResponse on success. 404 if profile is unknown. "
+        "422 on bad options / image / JSON parse or schema mismatch. "
+        "502 on provider failure. 503 + Retry-After: 1 when concurrency cap "
+        "is reached."
+    ),
+)
 async def detect(
     request: Request,
     image: UploadFile = File(

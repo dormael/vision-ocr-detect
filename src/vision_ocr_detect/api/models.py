@@ -33,7 +33,12 @@ async def _gather_models(
     return out
 
 
-@router.get("/models", response_model=ModelsResponse)
+@router.get(
+    "/models",
+    response_model=ModelsResponse,
+    summary="List models per provider (optional vision_only filter)",
+    response_description="200 with ModelsResponse. 502 if a provider errors; the failing provider contributes a synthetic entry rather than failing the whole response.",
+)
 async def list_models(
     vision_only: bool = Query(
         default=False,
@@ -45,7 +50,12 @@ async def list_models(
     return ModelsResponse(providers=by_provider)
 
 
-@router.get("/providers/{name}/models", response_model=ProviderModels)
+@router.get(
+    "/providers/{name}/models",
+    response_model=ProviderModels,
+    summary="List models for one provider",
+    response_description="200 with ProviderModels. 404 if provider name is unknown. 502 if the provider errors.",
+)
 async def list_provider_models(
     name: str,
     vision_only: bool = Query(default=False),

@@ -29,7 +29,11 @@ def _validate_provider(provider: str, allowed: set[str]) -> None:
         )
 
 
-@router.get("", response_model=list[Profile])
+@router.get(
+    "",
+    response_model=list[Profile],
+    summary="List profiles (optional ?tag= filter)",
+)
 def list_profiles(
     tag: str | None = Query(
         default=None,
@@ -40,7 +44,11 @@ def list_profiles(
     return store.list(tag=tag)
 
 
-@router.get("/{name}", response_model=Profile)
+@router.get(
+    "/{name}",
+    response_model=Profile,
+    summary="Get one profile by name",
+)
 def get_profile(
     name: str,
     store: ProfileStore = Depends(get_profile_store),
@@ -53,7 +61,13 @@ def get_profile(
         )
 
 
-@router.post("", response_model=Profile, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=Profile,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create profile",
+    response_description="201 with the created Profile. 409 if name is taken. 400 if provider is unknown. 422 on validation failure.",
+)
 def create_profile(
     body: ProfileCreate,
     store: ProfileStore = Depends(get_profile_store),
@@ -80,7 +94,12 @@ def create_profile(
         )
 
 
-@router.put("/{name}", response_model=Profile)
+@router.put(
+    "/{name}",
+    response_model=Profile,
+    summary="PATCH-style update (omitted fields preserved)",
+    response_description="200 with the updated Profile. 404 if not found. 422 on validation failure.",
+)
 def update_profile(
     name: str,
     body: ProfileUpdate,
@@ -100,7 +119,12 @@ def update_profile(
         )
 
 
-@router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete profile",
+    response_description="204 on success. 404 if not found.",
+)
 def delete_profile(
     name: str,
     store: ProfileStore = Depends(get_profile_store),

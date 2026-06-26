@@ -198,7 +198,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return response
 
-    @app.get("/health")
+    @app.get(
+        "/health",
+        summary="Liveness + capability snapshot",
+        description=(
+            "Reports configured provider names, count of loaded profiles, "
+            "and vision-capable model names per provider. Never returns 5xx — "
+            "provider failures are swallowed and contribute an empty "
+            "`vision_models` entry."
+        ),
+        response_description="200 with a small JSON snapshot.",
+    )
     async def health() -> dict[str, object]:
         s = settings or app.state.settings
         # Best-effort: enumerate vision-capable model names per provider.
