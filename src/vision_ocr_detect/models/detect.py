@@ -23,7 +23,31 @@ class JsonSchemaSpec(BaseModel):
     when present (best-effort; relies on the `jsonschema` library).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "seat_layout",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "stage_location": {
+                                "type": "string",
+                                "enum": ["TOP", "BOTTOM", "LEFT", "RIGHT", "CENTER"],
+                            },
+                            "sections": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                            },
+                        },
+                        "required": ["stage_location", "sections"],
+                    },
+                    "strict": True,
+                }
+            ]
+        },
+    )
 
     name: str = Field(min_length=1, max_length=64)
     schema_: dict[str, Any] = Field(
@@ -41,7 +65,23 @@ class JsonSchemaResponseFormat(BaseModel):
         {"type": "json_schema", "json_schema": {"name": "seat_layout", "schema": {...}}}
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "seat_layout",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"stage_location": {"type": "string"}},
+                        },
+                    },
+                }
+            ]
+        },
+    )
 
     type: Literal["json_schema"]
     json_schema: JsonSchemaSpec
@@ -89,6 +129,27 @@ class DetectOptions(BaseModel):
 
 
 class DetectResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "text": '{"stage_location": "TOP", "sections": []}',
+                    "parsed": {"stage_location": "TOP", "sections": []},
+                    "profile": "interpark-layout",
+                    "model": "qwen2.5vl:7b",
+                    "provider": "local-ollama",
+                    "elapsed_ms": 1247,
+                    "tokens_in": 1024,
+                    "tokens_out": 128,
+                    "cost_usd": 0.0,
+                    "seed_used": 42,
+                    "endpoint_used": "native",
+                }
+            ]
+        },
+    )
+
     text: str
     profile: str
     model: str

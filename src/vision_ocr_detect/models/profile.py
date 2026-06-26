@@ -49,7 +49,21 @@ def _validate_tags(v: list[str]) -> list[str]:
 class ProfileBase(BaseModel):
     """Shared fields between create/update."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "ocr-default",
+                    "provider": "local-ollama",
+                    "model": "glm-ocr:latest",
+                    "prompt": "Extract all text from this image.",
+                    "description": "Default OCR profile for general text.",
+                    "tags": ["ocr", "default"],
+                }
+            ]
+        },
+    )
 
     name: str = Field(pattern=_NAME_PATTERN)
     provider: str = Field(min_length=1)
@@ -74,7 +88,15 @@ class ProfileUpdate(BaseModel):
     To clear tags, send an empty list. To clear description, send null.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"model": "qwen2.5vl:7b"},
+                {"temperature": 0.0, "seed": 42, "description": None, "tags": []},
+            ]
+        },
+    )
 
     provider: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -92,6 +114,24 @@ class ProfileUpdate(BaseModel):
 
 class Profile(ProfileBase):
     """Stored profile (includes timestamps)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "ocr-default",
+                    "provider": "local-ollama",
+                    "model": "glm-ocr:latest",
+                    "prompt": "Extract all text from this image.",
+                    "description": "Default OCR profile for general text.",
+                    "tags": ["ocr", "default"],
+                    "created_at": "2026-06-01T12:00:00Z",
+                    "updated_at": "2026-06-25T09:00:00Z",
+                }
+            ]
+        },
+    )
 
     created_at: datetime
     updated_at: datetime
