@@ -432,17 +432,24 @@ API keys shouldn't live in `config.json` (which is often committed or
 shared). Two options, in priority order:
 
 1. **Environment variable** — set `OPENROUTER_API_KEY=sk-or-...` in the
-   process environment. The provider reads it directly.
+   process environment.
 2. **`.env` file** — write a single line to `.env` at the project root:
    ```
    OPENROUTER_API_KEY=sk-or-v1-...
    ```
-   pydantic-settings loads it automatically at startup.
-   `.env` is in `.gitignore` so secrets stay out of the repo.
+   pydantic-settings loads it automatically at startup and the provider
+   registry's `from_settings` copies it into `providers.openrouter.api_key`
+   when config.json omits one. `.env` is in `.gitignore` so secrets stay
+   out of the repo. See `.env.example` at the repo root for the template.
 
 Process env var wins over `.env` wins over `config.json`. Explicit
 `api_key` in `config.json` is the lowest-priority override (useful for
 single-tenant self-hosted deployments, otherwise avoid).
+
+**Adding a new provider with its own key?** Add a top-level field to
+`Settings` (`Field(alias="<NAME>_API_KEY")`) and a corresponding bridge
+branch in `ProviderRegistry.from_settings`. The pattern is one-time per
+provider — operators only need the env var or `.env` entry.
 
 ### `.env` file format
 

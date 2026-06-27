@@ -148,21 +148,61 @@ def test_lifespan_warns_when_openrouter_profile_lacks_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A lifespan startup that finds openrouter profiles in the store
-    but no OPENROUTER_API_KEY in env should emit a clear warning
-    listing the affected profiles — so operators don't have to wait
-    for a 502 at first call to discover their config is incomplete.
+    but no OPENROUTER_API_KEY available (env, .env, config.json all
+    empty) should emit a clear warning listing the affected profiles —
+    so operators don't have to wait for a 502 at first call to discover
+    their config is incomplete.
 
-    Uses the real config.json / profiles.json on disk (which contain
-    bundled openrouter profiles interpark-layout-32b / -72b) — no need
-    to fabricate a custom config. The warning fires on any startup
-    that finds openrouter profiles and no env var.
+    Uses an isolated tmp config + profiles + cwd (no `.env`) so the
+    developer's local `.env` doesn't leak into the test.
     """
     from fastapi.testclient import TestClient
 
     from vision_ocr_detect import main as main_mod
 
-    # Make sure no key is set via any path (.env / shell / test env).
+    # Isolated config that includes an openrouter provider block.
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "local-ollama": {
+                        "type": "ollama",
+                        "base_url": "http://localhost:11434",
+                    },
+                    "openrouter": {
+                        "type": "openrouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Isolated profiles with one openrouter profile so the warning fires.
+    profiles = tmp_path / "profiles.json"
+    profiles.write_text(
+        json.dumps(
+            {
+                "interpark-layout-32b": {
+                    "name": "interpark-layout-32b",
+                    "provider": "openrouter",
+                    "model": "qwen/qwen3-vl-32b-instruct",
+                    "prompt": "Extract layout.",
+                    "description": None,
+                    "tags": [],
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
+    monkeypatch.setenv("VISION_OCR_PROFILES", str(profiles))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)  # ensure no project .env leaks
 
     with caplog.at_level(logging.WARNING, logger="vision_ocr_detect.request"):
         app = main_mod.create_app()
@@ -180,9 +220,8 @@ def test_lifespan_warns_when_openrouter_profile_lacks_api_key(
         f"{[r.getMessage() for r in caplog.records]}"
     )
     msg = warn_records[-1].getMessage()
-    # Warning should list at least one openrouter profile (32b / 72b
-    # from the bundled profiles).
-    assert "interpark-layout-32b" in msg or "interpark-layout-72b" in msg, (
+    # Warning should list the openrouter profile.
+    assert "interpark-layout-32b" in msg, (
         f"warning should list a bundled openrouter profile: {msg}"
     )
 

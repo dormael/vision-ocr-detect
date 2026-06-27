@@ -83,11 +83,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # missing key, which would still crash the registry build below —
     # this warning only softens the diagnostic for the case where
     # profiles reference openrouter but the key isn't set.
-    import os
     openrouter_profiles = [
         p.name for p in store.list() if p.provider == "openrouter"
     ]
-    if openrouter_profiles and not os.environ.get("OPENROUTER_API_KEY"):
+    if openrouter_profiles and not settings.openrouter_api_key:
         request_logger.warning(
             "OPENROUTER_API_KEY is not set; openrouter profiles will fail "
             "at runtime: %s. Set the env var (or write to .env) and restart.",

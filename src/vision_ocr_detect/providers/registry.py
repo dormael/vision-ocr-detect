@@ -1,7 +1,14 @@
 """Provider registry: maps profile `provider` strings to live instances.
 
 Built once at startup from `Settings.providers`. Adding a new provider type
-means adding a branch to `_build()`.
+means adding a branch to `_BUILDERS` and a corresponding `ProviderConfig.type`
+literal in `config.py`.
+
+The `from_settings` classmethod also acts as the bridge between top-level
+Settings fields populated by pydantic-settings (e.g.
+`Settings.openrouter_api_key` from `OPENROUTER_API_KEY` in env or `.env`)
+and nested `ProviderConfig.api_key` values that the concrete providers
+read. config.json-supplied keys always win.
 """
 
 from __future__ import annotations
@@ -85,5 +92,17 @@ class ProviderRegistry:
                 raise ValueError(
                     f"unsupported provider type '{pconfig.type}' for '{name}'"
                 ) from e
+            # Bridge top-level Settings fields to nested ProviderConfig
+            # when config.json didn't supply them. Today this is just
+            # `openrouter_api_key`; add new branches here when a new
+            # provider gets its own top-level Settings field.
+            if (
+                pconfig.type == "openrouter"
+                and pconfig.api_key is None
+                and settings.openrouter_api_key is not None
+            ):
+                pconfig = pconfig.model_copy(
+                    update={"api_key": settings.openrouter_api_key}
+                )
             registry.register(name, builder(name, pconfig))
         return registry

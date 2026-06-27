@@ -74,18 +74,30 @@ class Settings(BaseSettings):
 
     Note: only top-level scalar fields receive env-var mapping
     automatically. Nested fields like `providers.openrouter.api_key`
-    are populated from config.json; provider classes then read the
-    `OPENROUTER_API_KEY` env var directly as a fallback if `api_key`
-    ends up `None`.
+    are populated from config.json; the `OPENROUTER_API_KEY` field
+    below is the top-level counterpart that pydantic-settings maps
+    from env / `.env`. The provider registry's `from_settings`
+    copies this field into `providers.openrouter.api_key` when the
+    provider config didn't already supply one.
     """
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    # Top-level so pydantic-settings auto-maps from `OPENROUTER_API_KEY`
+    # in process env / `.env` (priority order per BaseSettings). The
+    # provider registry copies this into `providers.openrouter.api_key`
+    # when that nested field is None.
+    openrouter_api_key: str | None = Field(
+        default=None,
+        alias="OPENROUTER_API_KEY",
+        description="OpenRouter API key. Auto-loaded from env or .env.",
+    )
 
     @field_validator("providers")
     @classmethod

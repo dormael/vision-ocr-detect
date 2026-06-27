@@ -234,3 +234,57 @@ def test_registry_builds_openrouter_provider() -> None:
     assert "openrouter" in _BUILDERS
     p = _BUILDERS["openrouter"]("openrouter", _make_config())
     assert isinstance(p, OpenRouterProvider)
+
+
+# --- registry → provider config bridge -----------------------------------
+# When `ProviderConfig.api_key is None` and `settings.openrouter_api_key`
+# is set, the registry's `from_settings` copies the key into the provider
+# config so the openrouter provider boots without the operator exporting
+# the env var manually.
+
+
+def test_registry_injects_openrouter_api_key_from_settings(monkeypatch) -> None:
+    """When config.json omits api_key, registry fills it from settings."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from vision_ocr_detect.config import ProviderConfig, Settings
+    from vision_ocr_detect.providers.registry import ProviderRegistry
+
+    settings = Settings(
+        openrouter_api_key="sk-or-from-settings",
+        providers={
+            "openrouter": ProviderConfig(
+                type="openrouter",
+                base_url="https://openrouter.ai/api/v1",
+            ),
+        },
+    )
+    registry = ProviderRegistry.from_settings(settings)
+    provider = registry.get("openrouter")
+    assert provider._api_key == "sk-or-from-settings"
+    assert (
+        provider._client.headers["Authorization"] == "Bearer sk-or-from-settings"
+    )
+
+
+def test_registry_preserves_explicit_config_api_key(monkeypatch) -> None:
+    """config.json의 api_key는 settings보다 우선한다."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from vision_ocr_detect.config import ProviderConfig, Settings
+    from vision_ocr_detect.providers.registry import ProviderRegistry
+
+    settings = Settings(
+        openrouter_api_key="sk-or-from-settings",
+        providers={
+            "openrouter": ProviderConfig(
+                type="openrouter",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-or-from-config",
+            ),
+        },
+    )
+    registry = ProviderRegistry.from_settings(settings)
+    provider = registry.get("openrouter")
+    assert provider._api_key == "sk-or-from-config"
+    assert (
+        provider._client.headers["Authorization"] == "Bearer sk-or-from-config"
+    )

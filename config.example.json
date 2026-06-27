@@ -20,7 +20,7 @@
     },
 
     "openrouter": {
-      "$comment_openrouter": "Cloud gateway at https://openrouter.ai — OpenAI-compatible. api_key=null falls back to OPENROUTER_API_KEY env var (or the .env file at project root, see README 'Secrets (api_key)'). cost_per_1k_* should be set to OpenRouter's published per-model pricing for accurate cost_usd in detect responses; 0.0 is a placeholder that always reports free.",
+      "$comment_openrouter": "Cloud gateway at https://openrouter.ai — OpenAI-compatible. api_key=null is OK; OPENROUTER_API_KEY auto-loads from process env or .env (project root) via pydantic-settings. config.json의 api_key가 명시되면 그것이 우선. cost_per_1k_* should be set to OpenRouter's published per-model pricing for accurate cost_usd in detect responses; 0.0 is a placeholder that always reports free.",
       "type": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": null,

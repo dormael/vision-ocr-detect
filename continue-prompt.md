@@ -102,14 +102,16 @@ fixtures/profiles/
 # 서버 상태
 curl -sf http://127.0.0.1:8000/health | python3 -m json.tool
 
-# 서버 재시작 (OPENROUTER_API_KEY 우회 — .env cwd 미해결 시)
+# 서버 재시작
 pkill -9 -f "uvicorn vision_ocr_detect" 2>/dev/null
-OPENROUTER_API_KEY="$(grep OPENROUTER_API_KEY .env | cut -d= -f2)" \
-  nohup uv run uvicorn vision_ocr_detect.main:app \
-    --host 0.0.0.0 --port 8000 \
-    --log-config logging.json \
-    > /tmp/ocr-server-logs/server.log 2>&1 &
+nohup uv run uvicorn vision_ocr_detect.main:app \
+  --host 0.0.0.0 --port 8000 \
+  --log-config logging.json \
+  > /tmp/ocr-server-logs/server.log 2>&1 &
 sleep 2 && curl -sf -o /dev/null -w "ready %{http_code}\n" http://127.0.0.1:8000/health
+
+# OPENROUTER_API_KEY는 .env에서 pydantic-settings가 자동 로드하므로
+# 수동 env var prefix 불필요. 단, process env에 export된 값이 있으면 그것이 우선.
 
 # Tests
 uv run pytest --ignore=tests/test_provider_smoke.py  # 137 unit/integ

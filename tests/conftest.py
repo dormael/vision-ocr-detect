@@ -125,6 +125,11 @@ def monkeypatch_env(
     config, profiles = tmp_paths
     monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
     monkeypatch.setenv("VISION_OCR_PROFILES", str(profiles))
+    # Neutralize any OPENROUTER_API_KEY leaked from the developer's local
+    # .env or shell. Settings.openrouter_api_key auto-populates from
+    # process env via pydantic-settings' Field(alias=...) mapping, so a
+    # leaked value would otherwise pollute test assertions.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     yield config, profiles
 
 

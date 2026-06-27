@@ -71,3 +71,94 @@ def test_settings_uses_base_settings() -> None:
     from vision_ocr_detect.config import Settings
 
     assert issubclass(Settings, BaseSettings)
+
+
+# --- Settings.openrouter_api_key -----------------------------------------
+# These tests cover the Field(alias="OPENROUTER_API_KEY") mapping on the
+# top-level Settings field. The value auto-populates from process env >
+# .env > None. The registry uses this field to bridge into the openrouter
+# provider config (see test_openrouter_provider.py for the bridge tests).
+
+
+def test_settings_openrouter_api_key_defaults_to_none(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No env var, no .env → field is None."""
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"providers": {"local-ollama": {"type": "ollama", "base_url": "http://x"}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
+    monkeypatch.chdir(tmp_path)  # isolate from project's real .env
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    from vision_ocr_detect.config import load_settings
+
+    settings = load_settings()
+    assert settings.openrouter_api_key is None
+
+
+def test_settings_openrouter_api_key_loads_from_env_var(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`Field(alias='OPENROUTER_API_KEY')` maps the env var to the field."""
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"providers": {"local-ollama": {"type": "ollama", "base_url": "http://x"}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env-var")
+
+    from vision_ocr_detect.config import load_settings
+
+    settings = load_settings()
+    assert settings.openrouter_api_key == "sk-or-from-env-var"
+
+
+def test_settings_openrouter_api_key_loads_from_dotenv(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End-to-end: `.env` value (with no process env override) populates
+    the field. This is the regression guard for the original symptom —
+    operators had to manually export the variable to escape it from .env."""
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"providers": {"local-ollama": {"type": "ollama", "base_url": "http://x"}}}',
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("OPENROUTER_API_KEY=sk-or-from-dotenv\n", encoding="utf-8")
+
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    from vision_ocr_detect.config import load_settings
+
+    settings = load_settings()
+    assert settings.openrouter_api_key == "sk-or-from-dotenv"
+
+
+def test_settings_process_env_overrides_dotenv(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Process env wins over .env (pydantic-settings default precedence)."""
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"providers": {"local-ollama": {"type": "ollama", "base_url": "http://x"}}}',
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("OPENROUTER_API_KEY=sk-or-from-dotenv\n", encoding="utf-8")
+
+    monkeypatch.setenv("VISION_OCR_CONFIG", str(config))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process-env")
+
+    from vision_ocr_detect.config import load_settings
+
+    settings = load_settings()
+    assert settings.openrouter_api_key == "sk-or-from-process-env"
